@@ -1,0 +1,43 @@
+{
+    "common": "ipc-defaults.json",
+    "geometry": [{
+        "mesh": "../meshes/thigh_pad_metric/y-up/UpperLegModifiedFullAirtightFiner.msh",
+        "transformation": {
+            "translation": [0, 0, 0]
+        },
+        "volume_selection": 2,
+        "surface_selection": "surface_selections_finer.txt"
+    }, {
+        "mesh": "meshes/plane_XZ_30cmx30cm.obj",
+        "is_obstacle": true,
+ 
+        "surface_selection": 3,
+        "transformation": {
+            "translation": [0, 0.1, 0]
+        }
+    }],
+    "time": {
+        "integrator": "ImplicitEuler",
+        "tend": 1,
+        "dt": 0.0125
+    },
+    "output": {
+        "paraview": {
+            "surface": true,
+            "points": true,
+            "options": {
+                "forces": true
+            }
+        }
+    },
+    "boundary_conditions": {
+        "dirichlet_boundary": [{
+            "id": 1,
+            "value": [0, 0, 0]
+        }],
+        "obstacle_displacements": [{
+            "id": 3,
+            "value": [0, "max(-0.1*t, 0.01 - 0.1) + max(min(0.1*(t-4), 0.05), 0)", 0]
+        }]
+    }
+}

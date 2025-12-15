@@ -1,0 +1,14 @@
+{
+    "model_path": "../meshes/thigh_pad_metric/y-up/UpperLegModifiedFullAirtightFiner.msh",
+    "selection_paths": [
+        "../meshes/thigh_pad_metric/y-up/selectors/btmDirichletSelector.stl",
+        "../meshes/thigh_pad_metric/y-up/selectors/channelSelector.stl"
+    ],
+    "bc_surfaces": [
+        0,
+        1
+    ],
+    "opt_surfaces": [],
+    "target_surfaces": [],
+    "vertex_scaling": 1
+}

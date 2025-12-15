@@ -1,0 +1,60 @@
+{
+    "common": "ipc-defaults.json",
+    "geometry": [{
+        "mesh": "cube2x2_hole.msh",
+        "transformation": {
+            "translation": [0, 0, 0]
+        },
+        "volume_selection": 1,
+        "surface_selection": [{
+            "id": 2,
+            "axis": "-y",
+            "position": -0.9
+        }, {
+            "id": 3,
+            "p1": [-0.5, 0, 0],
+            "p2": [1, 0, 0],
+            "radius": 0.55
+        }, {
+            "id": 4,
+            "p1": [0.9, 0, 0],
+            "p2": [1.1, 0, 0],
+            "radius": 0.7
+        }]
+    }],
+    "time": {
+        "tend": 2
+    },
+    "contact": {
+        "friction_coefficient": 0.1
+    },
+    "boundary_conditions": {
+        "rhs": [0, 0, 0],
+        "dirichlet_boundary": [{
+            "id": 2,
+            "value": [0, 0, 0]
+        },{
+            "id": 4,
+            "value": [0, 0, 0]
+        }],
+        "pressure_boundary": [{
+            "id": 3,
+            "value": "-4e5 * if(1-t, t, 0)"
+        }]
+    },
+    "materials": {
+        "type": "NeoHookean",
+        "E": 1e6,
+        "nu": 0.4,
+        "rho": 1000
+    },
+    "output": {
+        "paraview": {
+            "vismesh_rel_area": 1,
+            "surface": true,
+            "options": {
+                "body_ids": true
+            }
+        }
+    }
+}

@@ -1,0 +1,42 @@
+{
+    "common": "ipc-defaults.json",
+    "geometry": [{
+        "mesh": "cube.msh",
+        "transformation": {
+            "translation": [0, 0, 0]
+        },
+        "volume_selection": 2,
+        "point_selection":[{
+            "id": 1,
+            "axis": "-y",
+            "position": 0.02,
+            "relative": true
+        }]
+    }, {
+        "mesh": "plane.obj",
+        "is_obstacle": true,
+        "surface_selection": 2,
+        "transformation": {
+            "translation": [0, 1, 0]
+        }
+    }],
+    "output": {
+        "paraview": {
+            "surface": true,
+            "points": true,
+            "options": {
+                "forces": true
+            }
+        }
+    },
+    "boundary_conditions": {
+        "dirichlet_boundary": [{
+            "id": 1,
+            "value": [0, 0, 0]
+        }],
+        "obstacle_displacements": [{
+            "id": 2,
+            "value": [0, "max(-0.5*t, -0.75) + max(min(2*(t-4), 0.75), 0)", 0]
+        }]
+    }
+}

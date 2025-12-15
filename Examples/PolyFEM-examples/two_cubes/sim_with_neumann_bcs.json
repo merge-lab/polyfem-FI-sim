@@ -1,0 +1,45 @@
+{
+    "common": "ipc-defaults.json",
+    "geometry": [{
+        "mesh": "cube.msh",
+        "transformation": {
+            "translation": [0, 3, 0]
+        },
+        "volume_selection": 1
+    }, {
+        "mesh": "cube.msh",
+        "transformation": {
+            "translation": [0, 1, 0]
+        },
+        "volume_selection": 2,
+        "surface_selection":[{
+            "id": 1,
+            "axis": "+x",
+            "position": 0.48
+        }, {
+            "id": 2,
+            "axis": "-x",
+            "position": -0.48
+        }]
+    }, {
+        "mesh": "plane.obj",
+        "is_obstacle": true
+    }],
+    "output": {
+        "paraview": {
+            "surface": true,
+            "options": {
+                "forces": true
+            }
+        }
+    },
+    "boundary_conditions": {
+        "neumann_boundary": [{
+            "id": 1,
+            "value": [-0.05, 0, 0]
+        }, {
+            "id": 2,
+            "value": [0.05, 0, 0]
+        }]
+    }
+}
