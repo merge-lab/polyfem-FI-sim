@@ -1,0 +1,14 @@
+{
+    "model_path": "../meshes/Slab1ChannelAirtight - part.msh",
+    "selection_paths": [
+        "../meshes/Slab1ChannelAirtight - selectorDirichlet.obj",
+        "../meshes/Slab1ChannelAirtight - selectorChannel.obj"
+    ],
+    "bc_surfaces": [
+        0,
+        1
+    ],
+    "opt_surfaces": [],
+    "target_surfaces": [],
+    "vertex_scaling": 1
+}
