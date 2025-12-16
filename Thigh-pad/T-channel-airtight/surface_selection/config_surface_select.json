@@ -1,0 +1,14 @@
+{
+    "model_path": "../meshes/SlabBranchingChannelAirtight - part.msh",
+    "selection_paths": [
+        "../meshes/SlabBranchingChannelAirtight - selectorDirichlet.obj",
+        "../meshes/SlabBranchingChannelAirtight - selectorChannel.obj"
+    ],
+    "bc_surfaces": [
+        0,
+        1
+    ],
+    "opt_surfaces": [],
+    "target_surfaces": [],
+    "vertex_scaling": 1
+}
