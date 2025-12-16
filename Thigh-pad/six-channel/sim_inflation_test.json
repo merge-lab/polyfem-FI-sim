@@ -1,12 +1,12 @@
 {
     "common": "ipc-defaults.json",
     "geometry": [{
-        "mesh": "../meshes/thigh_pad_metric/y-up/UpperLegModifiedFullAirtight.msh",
+        "mesh": "meshes/ThighpadRemake - Part.msh",
         "transformation": {
             "translation": [0, 0, 0]
         },
         "volume_selection": 2,
-        "surface_selection": "surface_selections.txt"
+        "surface_selection": "surface_selection/surface_selections.txt"
     }],
     "time": {
         "integrator": "ImplicitEuler",
@@ -27,7 +27,7 @@
     },
     "materials": {
         "type": "NeoHookean",
-        "E": 5e5,
+        "E": 1e6,
         "nu": 0.4,
         "rho": 1000 
     },
@@ -39,7 +39,7 @@
         }],
         "pressure_boundary": [{
             "id": 2,
-            "value": "1e6 * if(0.5 - t, t, 0)"
+            "value": "-4e5 * if(0.5 - t, t, 0)"
         }]
     }
 }

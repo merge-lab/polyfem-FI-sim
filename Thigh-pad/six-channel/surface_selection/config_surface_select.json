@@ -1,0 +1,14 @@
+{
+    "model_path": "../meshes/ThighpadRemake - Part.msh",
+    "selection_paths": [
+        "../meshes/ThighpadRemake - selectorDirichlet.obj",
+        "../meshes/ThighpadRemake - selectorInterior.obj"
+    ],
+    "bc_surfaces": [
+        0,
+        1
+    ],
+    "opt_surfaces": [],
+    "target_surfaces": [],
+    "vertex_scaling": 1
+}
