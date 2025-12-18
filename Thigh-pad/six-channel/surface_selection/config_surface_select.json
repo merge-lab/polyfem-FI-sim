@@ -1,5 +1,5 @@
 {
-    "model_path": "../meshes/ThighpadRemake - Part.msh",
+    "model_path": "../meshes/ThighpadRemake - Part_coarsened.msh",
     "selection_paths": [
         "../meshes/ThighpadRemake - selectorDirichlet.obj",
         "../meshes/ThighpadRemake - selectorInterior.obj"

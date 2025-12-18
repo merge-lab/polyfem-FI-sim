@@ -1,12 +1,12 @@
 {
     "common": "ipc-defaults.json",
     "geometry": [{
-        "mesh": "../meshes/thigh_pad_metric/y-up/UpperLegModifiedFullAirtightFiner.msh",
+        "mesh": "meshes/ThighpadRemake - Part_coarsened.msh",
         "transformation": {
             "translation": [0, 0, 0]
         },
         "volume_selection": 2,
-        "surface_selection": "surface_selections_finer.txt"
+        "surface_selection": "surface_selection/surface_selections_ThighpadRemakeCoarsened.txt"
     }, {
         "mesh": "meshes/plane_XZ_30cmx30cm.obj",
         "is_obstacle": true,
@@ -34,6 +34,10 @@
         "dirichlet_boundary": [{
             "id": 1,
             "value": [0, 0, 0]
+        }],
+        "pressure_cavity": [{
+            "id": 2,
+            "value": 101325
         }],
         "obstacle_displacements": [{
             "id": 3,
