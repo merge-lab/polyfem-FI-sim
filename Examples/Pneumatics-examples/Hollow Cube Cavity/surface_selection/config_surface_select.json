@@ -1,0 +1,16 @@
+{
+    "model_path": "../meshes/HollowCube - part.msh",
+    "selection_paths": [
+        "../meshes/HollowCube - selectorDirichlet.obj",
+        "../meshes/HollowCube - selectorInterior.obj",
+        "../meshes/HollowCube - selectorTop.obj"
+    ],
+    "bc_surfaces": [
+        0,
+        1,
+        2
+    ],
+    "opt_surfaces": [],
+    "target_surfaces": [],
+    "vertex_scaling": 1
+}
