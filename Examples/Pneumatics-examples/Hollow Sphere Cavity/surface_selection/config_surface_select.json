@@ -1,0 +1,16 @@
+{
+    "model_path": "../meshes/HollowSphere - part.msh",
+    "selection_paths": [
+        "../meshes/HollowSphere - selectorBottom.obj",
+        "../meshes/HollowSphere - selectorInterior.obj",
+        "../meshes/HollowSphere - selectorTop.obj"
+    ],
+    "bc_surfaces": [
+        0,
+        1,
+        2
+    ],
+    "opt_surfaces": [],
+    "target_surfaces": [],
+    "vertex_scaling": 1
+}
