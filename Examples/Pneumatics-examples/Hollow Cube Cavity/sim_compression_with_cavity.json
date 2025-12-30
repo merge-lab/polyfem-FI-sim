@@ -28,11 +28,11 @@
             "value": [0, 0, 0]
         },{
             "id": 3,
-            "value": "-t"
+            "value": [0, "0.02*-t", 0]
         }],
         "pressure_cavity": [{
             "id": 2,
-            "value": 101325
+            "value": 0
         }]
     }
 }
