@@ -1,0 +1,34 @@
+{
+    "common": "ipc-defaults.json",
+    "geometry": [{
+        "mesh": "meshes/ThighpadRemake - Part_coarsened.msh",
+        "transformation": {
+            "translation": [0, 0, 0]
+        },
+        "volume_selection": 2,
+        "surface_selection": "surface_selection/surface_selections_bottom_int_top.txt"
+    }],
+    "time": {
+        "integrator": "ImplicitEuler",
+        "tend": 1,
+        "dt": 0.0125
+    },
+    "output": {
+        "paraview": {
+            "surface": true,
+            "points": true,
+            "options": {
+                "forces": true
+            }
+        }
+    },
+    "boundary_conditions": {
+        "dirichlet_boundary": [{
+            "id": 1,
+            "value": [0, 0, 0]
+        },{
+            "id": 3,
+            "value": [0, "-0.002*t", 0]
+        }]
+    }
+}
