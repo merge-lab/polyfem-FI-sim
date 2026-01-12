@@ -1,9 +1,9 @@
 {
     "model_path": "../meshes/ThighpadRemake - Part_coarsened.msh",
     "selection_paths": [
-        "../meshes/ThighpadRemake - selectorBase.obj",
-        "../meshes/ThighpadRemake - selectorInterior.obj",
-        "../meshes/ThighpadRemake - selectorTop.obj"
+        "../meshes/selectors/ThighpadRemake - selectorBase.obj",
+        "../meshes/selectors/ThighpadRemake - selectorInterior.obj",
+        "../meshes/selectors/ThighpadRemake - selectorTop.obj"
     ],
     "bc_surfaces": [
         0,
