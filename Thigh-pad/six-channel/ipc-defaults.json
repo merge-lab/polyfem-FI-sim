@@ -17,12 +17,12 @@
     },
     "boundary_conditions": {
         "rhs": [0, 9.81, 0]
-    },
+        },
     "materials": {
         "type": "NeoHookean",
         "E": 1e7,
         "nu": 0.4,
-        "rho": 1000 
+        "rho": 1040 
     },
     "solver": {
         "linear": {

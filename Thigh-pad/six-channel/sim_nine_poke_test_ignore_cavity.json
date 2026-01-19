@@ -1,0 +1,61 @@
+{
+    "common": "ipc-defaults.json",
+    "geometry": [{
+        "mesh": "meshes/ThighpadRemake - Part_fine.msh",
+        "transformation": {
+            "translation": [0, 0, 0]
+        },
+        "volume_selection": 2,
+        "surface_selection": "surface_selection/surface_selections_nine_poke_fine.txt"
+    }],
+    "time": {
+        "integrator": "ImplicitEuler",
+        "tend": 64,
+        "dt": 0.1
+    },
+    "output": {
+        "paraview": {
+            "surface": true,
+            "points": true,
+            "options": {
+                "forces": true
+            }
+        }
+    },
+    "space": {
+        "discr_order": 1
+    },
+    "boundary_conditions": {
+        "dirichlet_boundary": [{
+            "id": 10,
+            "value": [0, 0, 0]
+        },{
+            "id": 1,
+            "value": [0, "if(-abs(t-(1  + 7 )/2) + (7 -1 )/2, -0.003 * 2/(7 -1 ) * (-abs(t-(1  + 7 )/2) + (7 -1 )/2), 0)", 0]
+        },{
+            "id": 2,
+            "value": [0, "if(-abs(t-(8  + 14)/2) + (14-8 )/2, -0.003 * 2/(14-8 ) * (-abs(t-(8  + 14)/2) + (14-8 )/2), 0)", 0]
+        },{
+            "id": 3,
+            "value": [0, "if(-abs(t-(15 + 21)/2) + (21-15)/2, -0.003 * 2/(21-15) * (-abs(t-(15 + 21)/2) + (21-15)/2), 0)", 0]
+        },{
+            "id": 4,
+            "value": [0, "if(-abs(t-(22 + 28)/2) + (28-22)/2, -0.003 * 2/(28-22) * (-abs(t-(22 + 28)/2) + (28-22)/2), 0)", 0]
+        },{
+            "id": 5,
+            "value": [0, "if(-abs(t-(29 + 35)/2) + (35-29)/2, -0.003 * 2/(35-29) * (-abs(t-(29 + 35)/2) + (35-29)/2), 0)", 0]
+        },{
+            "id": 6,
+            "value": [0, "if(-abs(t-(36 + 42)/2) + (42-36)/2, -0.003 * 2/(42-36) * (-abs(t-(36 + 42)/2) + (42-36)/2), 0)", 0]
+        },{
+            "id": 7,
+            "value": [0, "if(-abs(t-(43 + 49)/2) + (49-43)/2, -0.003 * 2/(49-43) * (-abs(t-(43 + 49)/2) + (49-43)/2), 0)", 0]
+        },{
+            "id": 8,
+            "value": [0, "if(-abs(t-(50 + 56)/2) + (56-50)/2, -0.003 * 2/(56-50) * (-abs(t-(50 + 56)/2) + (56-50)/2), 0)", 0]
+        },{
+            "id": 9,
+            "value": [0, "if(-abs(t-(57 + 63)/2) + (63-57)/2, -0.003 * 2/(63-57) * (-abs(t-(57 + 63)/2) + (63-57)/2), 0)", 0]
+        }]
+    }
+}

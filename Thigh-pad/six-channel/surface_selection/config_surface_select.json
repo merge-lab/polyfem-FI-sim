@@ -1,6 +1,15 @@
 {
-    "model_path": "../meshes/ThighpadRemake - Part_coarsened.msh",
+    "model_path": "../meshes/ThighpadRemake - Part_fine.msh",
     "selection_paths": [
+        "../meshes/selectors/ThighpadRemake - selectorPoke1.obj",
+        "../meshes/selectors/ThighpadRemake - selectorPoke2.obj",
+        "../meshes/selectors/ThighpadRemake - selectorPoke3.obj",
+        "../meshes/selectors/ThighpadRemake - selectorPoke4.obj",
+        "../meshes/selectors/ThighpadRemake - selectorPoke5.obj",
+        "../meshes/selectors/ThighpadRemake - selectorPoke6.obj",
+        "../meshes/selectors/ThighpadRemake - selectorPoke7.obj",
+        "../meshes/selectors/ThighpadRemake - selectorPoke8.obj",
+        "../meshes/selectors/ThighpadRemake - selectorPoke9.obj",
         "../meshes/selectors/ThighpadRemake - selectorBase.obj",
         "../meshes/selectors/ThighpadRemake - selectorInterior.obj",
         "../meshes/selectors/ThighpadRemake - selectorTop.obj"
@@ -8,7 +17,16 @@
     "bc_surfaces": [
         0,
         1,
-        2
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
     ],
     "opt_surfaces": [],
     "target_surfaces": [],
