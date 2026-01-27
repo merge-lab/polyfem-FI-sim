@@ -1,17 +1,17 @@
 {
     "common": "ipc-defaults.json",
     "geometry": [{
-        "mesh": "meshes/ThighpadRemake - Part_coarsened.msh",
+        "mesh": "meshes/ThighpadRemake - Part_fine.msh",
         "transformation": {
             "translation": [0, 0, 0]
         },
         "volume_selection": 2,
-        "surface_selection": "surface_selection/surface_selections_bottom_int_top.txt"
+        "surface_selection": "surface_selection/surface_selections_bottom_int_top_fine.txt"
     }],
     "time": {
         "integrator": "ImplicitEuler",
-        "tend": 1,
-        "dt": 0.0125
+        "tend": 17.5,
+        "dt": 0.1
     },
     "output": {
         "paraview": {
@@ -28,7 +28,7 @@
             "value": [0, 0, 0]
         },{
             "id": 3,
-            "value": [0, "-0.002*t", 0]
+            "value": [0, "if(-0.000166666 * (-abs(t-(16.568 + 1)/2) + (16.568 - 1)/2) - -0.000464, if(-abs(t-(16.568 + 1)/2) + (16.568 - 1)/2, -0.000166666 * (-abs(t-(16.568 + 1)/2) + (16.568 - 1)/2), 0) , -0.000464)", 0]
         }]
     }
 }
