@@ -7,3 +7,4 @@
 *.gdb*
 build/
 .ipynb_checkpoints
+*.pyc
