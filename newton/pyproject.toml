@@ -1,0 +1,35 @@
+[project]
+name = "newton-sim"
+version = "0.1.0"
+description = "Newton robotics simulation tools"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "newton[examples]",
+]
+
+[tool.uv.sources]
+newton = { path = "../../newton", editable = true }
+
+[[tool.uv.index]]
+url = "https://pypi.org/simple"
+
+[[tool.uv.index]]
+name = "nvidia"
+url = "https://pypi.nvidia.com/"
+explicit = true
+
+[[tool.uv.index]]
+name = "mujoco"
+url = "https://py.mujoco.org"
+explicit = true
+
+# Override sources from newton's pyproject.toml
+[tool.uv.sources.warp-lang]
+index = "nvidia"
+
+[tool.uv.sources.mujoco]
+index = "mujoco"
+
+[tool.uv.sources.mujoco-warp]
+git = "https://github.com/google-deepmind/mujoco_warp"
