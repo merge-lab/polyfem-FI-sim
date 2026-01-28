@@ -26,6 +26,7 @@ class CubeExample:
         # or does the "model" object actually hold many models? since we "added"
         # the soft grid to it.
         self.solver = newton.solvers.SolverSemiImplicit(self.model)
+        # self.solver = newton.solvers.SolverFeatherstone(self.model)
 
         # Preallocate variables for trajectory, control, and contacts
         # ToLearn - do we always need control?
@@ -45,14 +46,15 @@ class CubeExample:
             TODO - is this a tet mesh? Hex mesh?
         """
         builder = newton.ModelBuilder()
-        builder.default_particle_radiu = 0.0005
+        builder.default_particle_radius = 0.0005
 
+        l = 0.2
         cells_per_side = 2
-        cell_size = 0.1
-        total_mass = 0.2
+        cell_size = l / cells_per_side
+        total_mass = 0.5
 
         # Compute particle density
-        num_particles = cells_per_side ** 3
+        num_particles = (cells_per_side + 1) ** 3
         particle_mass = total_mass / num_particles
         particle_density = particle_mass / (cell_size ** 3)
 
@@ -86,9 +88,10 @@ class CubeExample:
         )
 
         # Add ground plane
-        ke = 1.0e3
+        # TODO - understand the meaning of these numbers by looking at semi-implicit docs
+        ke = 1000
         kf = 0.0
-        kd = 1.0e0
+        kd = 10
         mu = 0.2
         builder.add_ground_plane(cfg=newton.ModelBuilder.ShapeConfig(ke=ke, kf=kf, kd=kd, mu=mu))
 
