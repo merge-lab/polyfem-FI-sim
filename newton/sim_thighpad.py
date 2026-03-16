@@ -27,11 +27,18 @@ class CubeExample:
         # Create FEM model
         self.model = self.create_model()
         self.viewer.set_model(self.model)
+        self.viewer.set_camera(wp.vec3([-0.5, 0.0, 0.25]), -20, 0.0)
 
         # ToLearn: what do you pass in here if you have multiple models?
         # or does the "model" object actually hold many models? since we "added"
         # the soft grid to it.
-        self.solver = newton.solvers.SolverSemiImplicit(self.model)
+        self.solver = newton.solvers.SolverVBD(
+            model=self.model,
+            iterations=10,
+            particle_enable_self_contact=False,
+            particle_enable_tile_solve=False,
+        )
+        # self.solver = newton.solvers.SolverSemiImplicit(self.model)
         # self.solver = newton.solvers.SolverFeatherstone(self.model)
 
         # Preallocate variables for trajectory, control, and contacts
@@ -41,7 +48,8 @@ class CubeExample:
         self.control = self.model.control()
 
         # TODO - look into what collision_pipeline options do
-        self.contacts = self.model.collide(self.state_now, soft_contact_margin=0.001)
+        # self.model.collide(self.state_now, self.contacts)
+        self.contacts = self.model.contacts()
 
         self.graph = None
         self.capture()
@@ -68,7 +76,7 @@ class CubeExample:
         msh_thighpad = meshio.read(filepath)
 
         # verts_thighpad = 0.1 * msh_thighpad.points
-        verts_thighpad = 500.0*msh_thighpad.points
+        verts_thighpad = msh_thighpad.points
         tet_indices = msh_thighpad.cells_dict["tetra"]
 
         # fig, ax = plt.subplots(subplot_kw={"projection": "3d"})
@@ -89,48 +97,56 @@ class CubeExample:
 
         ## Build the mesh in Newton's model builder
         builder = newton.ModelBuilder()
-        builder.default_particle_radius = 0.05
+        builder.default_particle_radius = 0.005
 
         # Get Lame parameters from Youngs modulus and Poisson's ratio
-        E = 1e4 # Youngs modulus (Pa)
-        nu = 0.3 # Poisson's ratio
+        E = 1e6 # Youngs modulus (Pa)
+        nu = 0.4 # Poisson's ratio
         k_lambda = E * nu / ((1 + nu) * (1 - 2 * nu))
         k_mu = E / (2 * (1 + nu))
+        rho = 1e3
+        # k_lambda = 1e5
+        # k_mu = 1e5
+        scale = 1.0
 
         print(f"k_lambda: {k_lambda}, k_mu: {k_mu}")
 
         # quat_initial = rot.as_quat(rot.from_euler("xyz", [np.pi/2, 0, 0]))
         quat_initial = wp.quat_from_axis_angle(wp.vec3([1, 0, 0]), np.pi/2)
         builder.add_soft_mesh(
-            pos         = wp.vec3(-40, 0.0, 10),
+            pos         = wp.vec3(0.0, 0.0, 0.2),
             rot         = quat_initial,
-            scale       = 1.0,
+            scale       = scale,
             vel         = wp.vec3(0.0, 0.0, 0.0),
             vertices    = mesh_pts_wp,
             indices     = tet_indices_wp,
-            density     = 1.0,
+            density     = rho,
             k_mu        = k_mu,
             k_lambda    = k_lambda,
-            k_damp      = 2.0,
+            k_damp      = 1e-3,
             tri_ke      = 0.0,
             tri_ka      = 1e-8,
             tri_kd      = 1e-4,
             tri_drag    = 0.0,
             tri_lift    = 0.0,
         )
+        builder.color()
 
         # Add ground plane
         # TODO - understand the meaning of these numbers by looking at semi-implicit docs
-        ke = 1000
-        kf = 0.0
-        kd = 10
-        mu = 0.2
-        builder.add_ground_plane(cfg=newton.ModelBuilder.ShapeConfig(ke=ke, kf=kf, kd=kd, mu=mu))
-
+        # ke = 100
+        ke = 2e6
+        # kf = 1
+        # kd = 0.0
+        kd = 1e-7
+        mu = 1.5
+        # builder.add_ground_plane(cfg=newton.ModelBuilder.ShapeConfig(ke=ke, kf=kf, kd=kd, mu=mu))
+        builder.add_ground_plane()
+ 
         # Finalize and export the model
         model = builder.finalize()
         model.soft_contact_ke = ke
-        model.soft_contact_kf = kf
+        # model.soft_contact_kf = kf
         model.soft_contact_kd = kd
         model.soft_contact_mu = mu
         return model
@@ -159,7 +175,7 @@ class CubeExample:
             self.viewer.apply_forces(self.state_now)
 
             # TODO - look into what collision pipelines do
-            self.contacts = self.model.collide(self.state_now)
+            self.model.collide(self.state_now, self.contacts)
             self.solver.step(self.state_now, self.state_next, self.control, self.contacts, self.sim_dt)
 
             # Swap the states (update state_now to be state_next)
@@ -191,6 +207,10 @@ class CubeExample:
 
 if __name__ == "__main__":
     viewer = newton.viewer.ViewerGL(headless=False)
+    # Default camera pose: 
+    #  - pos: [10.0, 0.0, 2.0]
+    #  - pitch: 0.0
+    #  - yaw: -180
 
     verbose = False
     cube_example = CubeExample(viewer, False)
