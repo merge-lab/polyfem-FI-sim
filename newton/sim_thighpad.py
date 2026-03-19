@@ -59,41 +59,11 @@ class CubeExample:
             Create the FEM mesh model
             TODO - is this a tet mesh? Hex mesh?
         """
-
-        ## Load the vertex positions and tet indices from the gmsh file
-        # filepath = "../PolyFEM/Thigh-pad/six-channel/meshes/ThighpadRemake - Part_fine.msh"
-        filepath = "../PolyFEM/Thigh-pad/six-channel/meshes/ThighpadRemake - Part_coarsened.msh"
-        # filepath = "../PolyFEM/Thigh-pad/six-channel/meshes/ThighpadRemake - Part_coarsened_ascii.msh"
-        # filepath = "../PolyFEM/Examples/Pneumatics-examples/Hollow Sphere Cavity/meshes/HollowSphere - part.msh"
-        # filepath = "../PolyFEM/Examples/Pneumatics-examples/Cube Inflation/cube2x2_hollow.msh"
-        # filepath = "../PolyFEM/Examples/Pneumatics-examples/Cube Inflation/cube2x2_hole.msh"
-        # filepath = "../PolyFEM/Examples/Pneumatics-examples/Cube Inflation/cube.msh"
-        # filepath = "cube_ftetwild.msh"
-        # filepath = "cube_ftetwild_reindexed.msh"
-        # filepath = "cube_ftetwild_manif.msh"
-        # filepath = "cube_gmsh.msh"
-        # filepath = "cube_breaks.msh"
-        msh_thighpad = meshio.read(filepath)
-
-        # verts_thighpad = 0.1 * msh_thighpad.points
-        verts_thighpad = msh_thighpad.points
-        tet_indices = msh_thighpad.cells_dict["tetra"]
-
-        # fig, ax = plt.subplots(subplot_kw={"projection": "3d"})
-        # ax.scatter(verts_thighpad[:, 0], verts_thighpad[:, 1], verts_thighpad[:, 2])
-        # plt.show()
-
-        print(f"Verts dtype: {verts_thighpad.dtype}")
-        print("Verts:")
-        print(verts_thighpad)
-        print("Verts range:")
-        print(np.array([np.min(verts_thighpad, axis=0), np.max(verts_thighpad, axis=0)]))
-        print(f"Tet dtype: {tet_indices.dtype}")
-
-        mesh_pts_wp = [wp.vec3(vert) for vert in verts_thighpad.astype(np.float32)]
-        # tet_indices_wp = Vt.IntArray(tet_indices.flatten().astype(np.int64).tolist())
-        tet_indices_wp = Vt.IntArray.FromNumpy(tet_indices.flatten().astype(np.int64))
-        # tet_indices_wp = Vt.IntArray.FromNumpy(np.ones(tet_indices.shape).flatten().astype(np.int64))
+        # Alternative method of fetching thighpad asset using the USD ecosystem
+        modelpath_thighpad = "../Assets/Thigh-pad/tets_coarse/model.usda"
+        stage_thighpad = Usd.Stage.Open(modelpath_thighpad)
+        prim_thighpad = stage_thighpad.GetPrimAtPath("/root/Model/TetMesh")
+        tetmesh_thighpad = newton.TetMesh.create_from_usd(prim_thighpad)
 
         ## Build the mesh in Newton's model builder
         builder = newton.ModelBuilder()
@@ -111,15 +81,14 @@ class CubeExample:
 
         print(f"k_lambda: {k_lambda}, k_mu: {k_mu}")
 
-        # quat_initial = rot.as_quat(rot.from_euler("xyz", [np.pi/2, 0, 0]))
         quat_initial = wp.quat_from_axis_angle(wp.vec3([1, 0, 0]), np.pi/2)
+        # quat_initial = wp.quat_identity()
         builder.add_soft_mesh(
             pos         = wp.vec3(0.0, 0.0, 0.2),
             rot         = quat_initial,
             scale       = scale,
             vel         = wp.vec3(0.0, 0.0, 0.0),
-            vertices    = mesh_pts_wp,
-            indices     = tet_indices_wp,
+            mesh        = tetmesh_thighpad,
             density     = rho,
             k_mu        = k_mu,
             k_lambda    = k_lambda,
@@ -136,7 +105,7 @@ class CubeExample:
         # TODO - understand the meaning of these numbers by looking at semi-implicit docs
         # ke = 100
         ke = 2e6
-        # kf = 1
+        kf = 1
         # kd = 0.0
         kd = 1e-7
         mu = 1.5
@@ -146,7 +115,7 @@ class CubeExample:
         # Finalize and export the model
         model = builder.finalize()
         model.soft_contact_ke = ke
-        # model.soft_contact_kf = kf
+        model.soft_contact_kf = kf
         model.soft_contact_kd = kd
         model.soft_contact_mu = mu
         return model
