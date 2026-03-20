@@ -18,8 +18,12 @@ class CubeExample:
         self.sim_time = 0.0
         self.frame_dt = 1.0/self.fps                    # dt of each macro-step
         self.sim_steps = 60                             # # of macrosteps in sim
-        self.sim_substeps = 16                          # # of substeps per macrostep
+        self.sim_substeps = 10                          # # of substeps per macrostep
+        self.iterations = 5 
         self.sim_dt = self.frame_dt / self.sim_substeps # dt of each substep
+
+        self.gravity_zero = wp.zeros(1, dtype=wp.vec3)
+        self.gravity_earth = wp.array(wp.vec3(0.0, 0.0, -9.81), dtype=wp.vec3)
 
         self.verbose = verbose
         self.viewer = viewer
@@ -32,14 +36,17 @@ class CubeExample:
         # ToLearn: what do you pass in here if you have multiple models?
         # or does the "model" object actually hold many models? since we "added"
         # the soft grid to it.
-        self.solver = newton.solvers.SolverVBD(
+        self.solver_vbd = newton.solvers.SolverVBD(
             model=self.model,
-            iterations=10,
+            iterations=self.iterations,
+            integrate_with_external_rigid_solver=True,
+            # particle_enable_tile_solve=False,
             particle_enable_self_contact=False,
-            particle_enable_tile_solve=False,
+            particle_vertex_contact_buffer_size=32,
+            particle_edge_contact_buffer_size=64,
+            particle_collision_detection_interval=-1,
         )
-        # self.solver = newton.solvers.SolverSemiImplicit(self.model)
-        # self.solver = newton.solvers.SolverFeatherstone(self.model)
+        self.solver_featherstone = newton.solvers.SolverFeatherstone(self.model, update_mass_matrix_interval=self.sim_substeps)
 
         # Preallocate variables for trajectory, control, and contacts
         # ToLearn - do we always need control?
@@ -59,15 +66,16 @@ class CubeExample:
             Create the FEM mesh model
             TODO - is this a tet mesh? Hex mesh?
         """
-        # Alternative method of fetching thighpad asset using the USD ecosystem
+        # Initialize the scene
+        self.scene = newton.ModelBuilder()
+        self.scene.default_particle_radius = 0.005
+
+        ## ======= Add thigh pad =============
+        # Fetching thighpad asset using the USD ecosystem
         modelpath_thighpad = "../Assets/Thigh-pad/tets_coarse/model.usda"
         stage_thighpad = Usd.Stage.Open(modelpath_thighpad)
         prim_thighpad = stage_thighpad.GetPrimAtPath("/root/Model/TetMesh")
         tetmesh_thighpad = newton.TetMesh.create_from_usd(prim_thighpad)
-
-        ## Build the mesh in Newton's model builder
-        builder = newton.ModelBuilder()
-        builder.default_particle_radius = 0.005
 
         # Get Lame parameters from Youngs modulus and Poisson's ratio
         E = 1e6 # Youngs modulus (Pa)
@@ -83,8 +91,8 @@ class CubeExample:
 
         quat_initial = wp.quat_from_axis_angle(wp.vec3([1, 0, 0]), np.pi/2)
         # quat_initial = wp.quat_identity()
-        builder.add_soft_mesh(
-            pos         = wp.vec3(0.0, 0.0, 0.2),
+        self.scene.add_soft_mesh(
+            pos         = wp.vec3(0.0, 0.0, 0.05),
             rot         = quat_initial,
             scale       = scale,
             vel         = wp.vec3(0.0, 0.0, 0.0),
@@ -99,9 +107,13 @@ class CubeExample:
             tri_drag    = 0.0,
             tri_lift    = 0.0,
         )
-        builder.color()
 
-        # Add ground plane
+        ## ======= Add poke test fixture =======
+        builder_poke_fixture = newton.ModelBuilder()
+        self.create_poker(builder_poke_fixture)
+        self.scene.add_world(builder_poke_fixture)
+
+        ## ======== Add ground plane =======
         # TODO - understand the meaning of these numbers by looking at semi-implicit docs
         # ke = 100
         ke = 2e6
@@ -110,15 +122,26 @@ class CubeExample:
         kd = 1e-7
         mu = 1.5
         # builder.add_ground_plane(cfg=newton.ModelBuilder.ShapeConfig(ke=ke, kf=kf, kd=kd, mu=mu))
-        builder.add_ground_plane()
+        self.scene.add_ground_plane()
  
-        # Finalize and export the model
-        model = builder.finalize()
+        ## ======== Finalize and export the model =======
+        self.scene.color()
+        model = self.scene.finalize()
         model.soft_contact_ke = ke
         model.soft_contact_kf = kf
         model.soft_contact_kd = kd
         model.soft_contact_mu = mu
         return model
+
+    def create_poker(self, builder):
+        path_poker = "./usd/thighpad_poke_fixture_onshape.usd"
+        builder.add_usd(
+            path_poker,
+            # For some reason the origin of the poke fixture usd is at Poke 6 (-x, +y corner)
+            xform=wp.transform((0.025117, -0.020982, 0.1), wp.quat_identity()),
+            enable_self_collisions=False,
+            force_show_colliders=True,
+        )
 
     def capture(self):
         """
@@ -135,29 +158,50 @@ class CubeExample:
     
     def simulate(self):
         """
-            Go through all of the sub-steps, corresponding to one macro step...??
+            Go through all of the sub-steps, co)rresponding to one macro step...??
             Not quite sure how this makes sense
         """
+
+        self.solver_vbd.rebuild_bvh(self.state_now)
         for i in range(self.sim_substeps):
-            # Reset forces on the current state
+            # Old - bill
+            # # Reset forces on the current state
             self.state_now.clear_forces()
+            self.state_next.clear_forces()
             self.viewer.apply_forces(self.state_now)
 
-            # TODO - look into what collision pipelines do
-            self.model.collide(self.state_now, self.contacts)
-            self.solver.step(self.state_now, self.state_next, self.control, self.contacts, self.sim_dt)
+            # Featherstone as kinematic integrator (disable particles + gravity)
+            particle_count = self.model.particle_count
+            self.model.particle_count = 0
+            self.model.gravity.assign(self.gravity_zero)
+            self.model.shape_contact_pair_count = 0
 
-            # Swap the states (update state_now to be state_next)
-            # We can swap because state_next can really be anything
-            # TODO - maybe it can be None? or does that break things
+            # # self.state_now.joint_qd.assign(self.target_joint_qd) # TODO - move joints
+            self.solver_featherstone.step(self.state_now, self.state_next, self.control, None, self.sim_dt)
+
+            self.state_now.particle_f.zero_()
+            self.model.particle_count = particle_count
+            self.model.gravity.assign(self.gravity_earth)
+
+            # # TODO - look into what collision pipelines do
+            self.model.collide(self.state_now, self.contacts)
+            self.solver_vbd.step(self.state_now, self.state_next, self.control, self.contacts, self.sim_dt)
+
+            # # Swap the states (update state_now to be state_next)
+            # # We can swap because state_next can really be anything
+            # # TODO - maybe it can be None? or does that break things
             self.state_now, self.state_next = self.state_next, self.state_now
+
+            print(f"State now: {self.state_now.__dict__}")
+            self.sim_time += self.sim_dt
+
 
     def step(self):
         if self.graph:
             wp.capture_launch(self.graph)
+            self.sim_time += self.sim_dt
         else:
             self.simulate()
-        self.sim_time += self.frame_dt
 
     def run(self):
         while self.viewer.is_running():
