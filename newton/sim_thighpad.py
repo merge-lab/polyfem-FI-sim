@@ -10,7 +10,7 @@ from pxr import Usd, UsdGeom, Vt
 
 import matplotlib.pyplot as plt
 
-class CubeExample:
+class ThighpadPokeTest:
     def __init__(self, viewer, verbose=False):
         # Setup simulation parameters
         self.fps = 60
@@ -28,10 +28,12 @@ class CubeExample:
         self.verbose = verbose
         self.viewer = viewer
 
-        # Create FEM model
+        # Create scene
         self.model = self.create_model()
+
+        # Initialize camera
         self.viewer.set_model(self.model)
-        self.viewer.set_camera(wp.vec3([-0.5, 0.0, 0.25]), -20, 0.0)
+        self.viewer.set_camera(wp.vec3([-0.10, 0.0, 0.05]), -15, 0.0)
 
         # ToLearn: what do you pass in here if you have multiple models?
         # or does the "model" object actually hold many models? since we "added"
@@ -46,7 +48,7 @@ class CubeExample:
             particle_edge_contact_buffer_size=64,
             particle_collision_detection_interval=-1,
         )
-        self.solver_featherstone = newton.solvers.SolverFeatherstone(self.model, update_mass_matrix_interval=self.sim_substeps)
+        self.solver_rigid = newton.solvers.SolverMuJoCo(self.model)
 
         # Preallocate variables for trajectory, control, and contacts
         # ToLearn - do we always need control?
@@ -79,10 +81,10 @@ class CubeExample:
 
         # Get Lame parameters from Youngs modulus and Poisson's ratio
         E = 1e6 # Youngs modulus (Pa)
-        nu = 0.4 # Poisson's ratio
+        nu = 0.45 # Poisson's ratio
         k_lambda = E * nu / ((1 + nu) * (1 - 2 * nu))
         k_mu = E / (2 * (1 + nu))
-        rho = 1e3
+        rho = 1
         # k_lambda = 1e5
         # k_mu = 1e5
         scale = 1.0
@@ -92,7 +94,7 @@ class CubeExample:
         quat_initial = wp.quat_from_axis_angle(wp.vec3([1, 0, 0]), np.pi/2)
         # quat_initial = wp.quat_identity()
         self.scene.add_soft_mesh(
-            pos         = wp.vec3(0.0, 0.0, 0.05),
+            pos         = wp.vec3(0.0, 0.0, 0.02),
             rot         = quat_initial,
             scale       = scale,
             vel         = wp.vec3(0.0, 0.0, 0.0),
@@ -177,7 +179,7 @@ class CubeExample:
             self.model.shape_contact_pair_count = 0
 
             # # self.state_now.joint_qd.assign(self.target_joint_qd) # TODO - move joints
-            self.solver_featherstone.step(self.state_now, self.state_next, self.control, None, self.sim_dt)
+            self.solver_rigid.step(self.state_now, self.state_next, self.control, None, self.sim_dt)
 
             self.state_now.particle_f.zero_()
             self.model.particle_count = particle_count
@@ -197,6 +199,11 @@ class CubeExample:
 
 
     def step(self):
+        time_period = 10
+        z = 0.002 * np.sin(self.sim_time* 2*np.pi / time_period) + 0.084
+        v_joint_target_pos_np = z * np.ones(9) 
+        wp.copy(self.control.joint_target_pos, wp.array(v_joint_target_pos_np, dtype=wp.float32))
+
         if self.graph:
             wp.capture_launch(self.graph)
             self.sim_time += self.sim_dt
@@ -226,7 +233,7 @@ if __name__ == "__main__":
     #  - yaw: -180
 
     verbose = False
-    cube_example = CubeExample(viewer, False)
-    cube_example.run()
+    thighpad_poke_test = ThighpadPokeTest(viewer, False)
+    thighpad_poke_test.run()
 
     viewer.close()
