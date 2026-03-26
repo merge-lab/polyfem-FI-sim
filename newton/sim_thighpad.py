@@ -3,6 +3,10 @@ from scipy.spatial.transform import Rotation as rot
 
 import meshio
 
+# Used for mesh pre-processing
+import pandas as pd
+from scipy.spatial import KDTree
+
 import warp as wp
 import newton
 import newton.examples
@@ -33,11 +37,9 @@ class ThighpadPokeTest:
 
         # Initialize camera
         self.viewer.set_model(self.model)
-        self.viewer.set_camera(wp.vec3([-0.10, 0.0, 0.05]), -15, 0.0)
+        self.viewer.set_camera(wp.vec3([-0.15, 0.0, 0.03]), -5, 0.0)
 
-        # ToLearn: what do you pass in here if you have multiple models?
-        # or does the "model" object actually hold many models? since we "added"
-        # the soft grid to it.
+        # Initialize both solvers
         self.solver_vbd = newton.solvers.SolverVBD(
             model=self.model,
             iterations=self.iterations,
@@ -51,7 +53,6 @@ class ThighpadPokeTest:
         self.solver_rigid = newton.solvers.SolverMuJoCo(self.model)
 
         # Preallocate variables for trajectory, control, and contacts
-        # ToLearn - do we always need control?
         self.state_now = self.model.state()
         self.state_next = self.model.state()
         self.control = self.model.control()
@@ -65,55 +66,15 @@ class ThighpadPokeTest:
 
     def create_model(self):
         """
-            Create the FEM mesh model
-            TODO - is this a tet mesh? Hex mesh?
+            Create the simulation scene
         """
         # Initialize the scene
         self.scene = newton.ModelBuilder()
-        self.scene.default_particle_radius = 0.005
+        self.scene.default_particle_radius = 0.0005
 
         ## ======= Add thigh pad =============
-        # Fetching thighpad asset using the USD ecosystem
-        modelpath_thighpad = "../Assets/Thigh-pad/tets_coarse/model.usda"
-        stage_thighpad = Usd.Stage.Open(modelpath_thighpad)
-        prim_thighpad = stage_thighpad.GetPrimAtPath("/root/Model/TetMesh")
-        tetmesh_thighpad = newton.TetMesh.create_from_usd(prim_thighpad)
-
-        # Get Lame parameters from Youngs modulus and Poisson's ratio
-        E = 1e6 # Youngs modulus (Pa)
-        nu = 0.45 # Poisson's ratio
-        k_lambda = E * nu / ((1 + nu) * (1 - 2 * nu))
-        k_mu = E / (2 * (1 + nu))
-        rho = 1
-        # k_lambda = 1e5
-        # k_mu = 1e5
-        scale = 1.0
-
-        print(f"k_lambda: {k_lambda}, k_mu: {k_mu}")
-
-        quat_initial = wp.quat_from_axis_angle(wp.vec3([1, 0, 0]), np.pi/2)
-        # quat_initial = wp.quat_identity()
-        self.scene.add_soft_mesh(
-            pos         = wp.vec3(0.0, 0.0, 0.02),
-            rot         = quat_initial,
-            scale       = scale,
-            vel         = wp.vec3(0.0, 0.0, 0.0),
-            mesh        = tetmesh_thighpad,
-            density     = rho,
-            k_mu        = k_mu,
-            k_lambda    = k_lambda,
-            k_damp      = 1e-3,
-            tri_ke      = 0.0,
-            tri_ka      = 1e-8,
-            tri_kd      = 1e-4,
-            tri_drag    = 0.0,
-            tri_lift    = 0.0,
-        )
-
-        ## ======= Add poke test fixture =======
-        builder_poke_fixture = newton.ModelBuilder()
-        self.create_poker(builder_poke_fixture)
-        self.scene.add_world(builder_poke_fixture)
+        self.create_thighpad(self.scene)
+        self.create_poker(self.scene)
 
         ## ======== Add ground plane =======
         # TODO - understand the meaning of these numbers by looking at semi-implicit docs
@@ -135,15 +96,71 @@ class ThighpadPokeTest:
         model.soft_contact_mu = mu
         return model
 
-    def create_poker(self, builder):
+    def create_thighpad(self, scene):
+        """
+            Load the thigh pad and place it in the simulation scene
+        """
+        # Fetching thighpad asset using the USD ecosystem
+        modelpath_thighpad = "../Assets/Thigh-pad/tets_coarse/model.usda"
+        stage_thighpad = Usd.Stage.Open(modelpath_thighpad)
+        prim_thighpad = stage_thighpad.GetPrimAtPath("/root/Model/TetMesh")
+        tetmesh_thighpad = newton.TetMesh.create_from_usd(prim_thighpad)
+
+        # Get Lame parameters from Youngs modulus and Poisson's ratio
+        E = 1e6 # Youngs modulus (Pa)
+        nu = 0.45 # Poisson's ratio
+        k_lambda = E * nu / ((1 + nu) * (1 - 2 * nu))
+        k_mu = E / (2 * (1 + nu))
+        rho = 1
+        scale = 1.0
+
+        print(f"k_lambda: {k_lambda}, k_mu: {k_mu}")
+
+        quat_initial = wp.quat_from_axis_angle(wp.vec3([1, 0, 0]), np.pi/2)
+        # quat_initial = wp.quat_identity()
+        start_particle_idx = len(scene.particle_q)
+        scene.add_soft_mesh(
+            pos         = wp.vec3(0.0, 0.0, 0.001),
+            rot         = quat_initial,
+            scale       = scale,
+            vel         = wp.vec3(0.0, 0.0, 0.0),
+            mesh        = tetmesh_thighpad,
+            density     = rho,
+            k_mu        = k_mu,
+            k_lambda    = k_lambda,
+            k_damp      = 1e-3,
+            tri_ke      = 0.0,
+            tri_ka      = 1e-8,
+            tri_kd      = 1e-4,
+            tri_drag    = 0.0,
+            tri_lift    = 0.0,
+        )
+
+        # LOL okay this is all stupid because i forgot that surface_selections.txt rows are surfs, each col value is vertex id.
+        # Read surface selection csv to find nodes that we want to fix in place
+        col_names = ["id_surf", "v_x", "v_y", "v_z"]
+        df_surf_select = pd.read_csv("../Assets/Thigh-pad/tets_coarse/surface_selections.txt", names=col_names, sep="\s+")
+        surf_id_bottom = 3
+        df_verts_bottom = df_surf_select[df_surf_select["id_surf"] == surf_id_bottom][["v_x", "v_y", "v_z"]]
+        np_verts_bottom = df_verts_bottom.to_numpy(dtype=np.int64)
+        ids_verts_bottom = np.unique(np_verts_bottom)
+
+        # Fix bottom surface particles in place by zeroing their mass
+        for vert_id in ids_verts_bottom:
+            scene.particle_mass[start_particle_idx + vert_id] = 0.0
+
+
+    def create_poker(self, scene):
+        builder_poke_fixture = newton.ModelBuilder()
         path_poker = "./usd/thighpad_poke_fixture_onshape.usd"
-        builder.add_usd(
+        builder_poke_fixture.add_usd(
             path_poker,
             # For some reason the origin of the poke fixture usd is at Poke 6 (-x, +y corner)
             xform=wp.transform((0.025117, -0.020982, 0.1), wp.quat_identity()),
             enable_self_collisions=False,
             force_show_colliders=True,
         )
+        scene.add_world(builder_poke_fixture)
 
     def capture(self):
         """
@@ -199,8 +216,8 @@ class ThighpadPokeTest:
 
 
     def step(self):
-        time_period = 10
-        z = 0.002 * np.sin(self.sim_time* 2*np.pi / time_period) + 0.084
+        time_period = 7
+        z = 0.004 * np.sin(self.sim_time* 2*np.pi / time_period) + 0.085
         v_joint_target_pos_np = z * np.ones(9) 
         wp.copy(self.control.joint_target_pos, wp.array(v_joint_target_pos_np, dtype=wp.float32))
 
