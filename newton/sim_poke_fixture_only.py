@@ -27,8 +27,6 @@ class ThighpadPokeTest:
         self.iterations = 5 
         self.sim_dt = self.frame_dt / self.sim_substeps # dt of each substep
 
-        self.particle_radius = 0.0005 #1mm diameter
-
         self.gravity_zero = wp.zeros(1, dtype=wp.vec3)
         self.gravity_earth = wp.array(wp.vec3(0.0, 0.0, -9.81), dtype=wp.vec3)
 
@@ -53,17 +51,14 @@ class ThighpadPokeTest:
             # particle_enable_tile_solve=False,
             # particle_enable_self_contact=False,
             particle_enable_self_contact=True,
-            particle_self_contact_radius=0.0002,
-            particle_self_contact_margin=0.0004,
+            particle_self_contact_radius=0.04,
+            particle_self_contact_margin=0.06,
             particle_vertex_contact_buffer_size=32,
             particle_edge_contact_buffer_size=64,
             particle_collision_detection_interval=-1,
             particle_enable_tile_solve=False
         )
-
-        self.solver_rigid = None
-        if not self.args["no_poke"]:
-            self.solver_rigid = newton.solvers.SolverMuJoCo(self.model)
+        self.solver_rigid = newton.solvers.SolverMuJoCo(self.model)
 
         # Preallocate variables for trajectory, control, and contacts
         self.state_now = self.model.state()
@@ -88,14 +83,11 @@ class ThighpadPokeTest:
         """
         # Initialize the scene
         self.scene = newton.ModelBuilder()
-        self.scene.default_particle_radius = self.particle_radius
+        self.scene.default_particle_radius = 0.0005
 
         ## ======= Add thigh pad =============
         self.create_thighpad(self.scene)
-
-        ## ======= Add poke fixture if not disabled =============
-        if not self.args["no_poke"]:
-            self.create_poker(self.scene)
+        self.create_poker(self.scene)
 
         ## ======== Add ground plane =======
         # TODO - understand the meaning of these numbers by looking at semi-implicit docs
@@ -136,76 +128,76 @@ class ThighpadPokeTest:
         """
             Load the thigh pad and place it in the simulation scene
         """
-        # Fetching thighpad asset using the USD ecosystem
-        modelpath_thighpad = "../Assets/Thigh-pad/tets_coarse/model.usda"
-        # modelpath_thighpad = "../Assets/Thigh-pad/tets_fine/model.usda"
-        stage_thighpad = Usd.Stage.Open(modelpath_thighpad)
-        prim_thighpad = stage_thighpad.GetPrimAtPath("/root/Model/TetMesh")
-        tetmesh_thighpad = newton.TetMesh.create_from_usd(prim_thighpad)
+        # # Fetching thighpad asset using the USD ecosystem
+        # modelpath_thighpad = "../Assets/Thigh-pad/tets_coarse/model.usda"
+        # stage_thighpad = Usd.Stage.Open(modelpath_thighpad)
+        # prim_thighpad = stage_thighpad.GetPrimAtPath("/root/Model/TetMesh")
+        # tetmesh_thighpad = newton.TetMesh.create_from_usd(prim_thighpad)
 
-        # Get Lame parameters from Youngs modulus and Poisson's ratio
-        E = 1e6 # Youngs modulus (Pa)
-        nu = 0.45 # Poisson's ratio
-        k_lambda = E * nu / ((1 + nu) * (1 - 2 * nu))
-        k_mu = E / (2 * (1 + nu))
-        rho = 1.0e3 # kg/m^3
-        scale = 1.0
+        # # Get Lame parameters from Youngs modulus and Poisson's ratio
+        # E = 1e6 # Youngs modulus (Pa)
+        # nu = 0.45 # Poisson's ratio
+        # k_lambda = E * nu / ((1 + nu) * (1 - 2 * nu))
+        # k_mu = E / (2 * (1 + nu))
+        # rho = 1.0e3 # kg/m^3
+        # scale = 1.0
 
-        print(f"k_lambda: {k_lambda}, k_mu: {k_mu}")
+        # print(f"k_lambda: {k_lambda}, k_mu: {k_mu}")
 
-        quat_initial = wp.quat_from_axis_angle(wp.vec3([1, 0, 0]), np.pi/2)
-        # quat_initial = wp.quat_identity()
-        start_particle_idx = len(scene.particle_q)
-        scene.add_soft_mesh(
-            pos         = wp.vec3(0.0, 0.0, 0.005),
-            rot         = quat_initial,
-            scale       = scale,
-            vel         = wp.vec3(0.0, 0.0, 0.0),
-            mesh        = tetmesh_thighpad,
-            density     = rho,
-            k_mu        = k_mu,
-            k_lambda    = k_lambda,
-            k_damp      = 1e-2,
-            tri_ke      = 0.0,
-            tri_ka      = 0.0,
-            tri_kd      = 0.0,
-            tri_drag    = 0.0,
-            tri_lift    = 0.0,
-        )
+        # quat_initial = wp.quat_from_axis_angle(wp.vec3([1, 0, 0]), np.pi/2)
+        # # quat_initial = wp.quat_identity()
+        # start_particle_idx = len(scene.particle_q)
+        # scene.add_soft_mesh(
+        #     pos         = wp.vec3(0.0, 0.0, 0.005),
+        #     rot         = quat_initial,
+        #     scale       = scale,
+        #     vel         = wp.vec3(0.0, 0.0, 0.0),
+        #     mesh        = tetmesh_thighpad,
+        #     density     = rho,
+        #     k_mu        = k_mu,
+        #     k_lambda    = k_lambda,
+        #     k_damp      = 1e-2,
+        #     tri_ke      = 0.0,
+        #     tri_ka      = 0.0,
+        #     tri_kd      = 0.0,
+        #     tri_drag    = 0.0,
+        #     tri_lift    = 0.0,
+        # )
 
-        # Read surface selection csv to find nodes that we want to fix in place
-        col_names = ["id_surf", "v_x", "v_y", "v_z"]
-        df_surf_select = pd.read_csv("../Assets/Thigh-pad/tets_coarse/surface_selections.txt", names=col_names, sep="\s+")
-        # df_surf_select = pd.read_csv("../Assets/Thigh-pad/tets_fine/surface_selections.txt", names=col_names, sep="\s+")
-        surf_id_bottom = 1
-        df_verts_bottom = df_surf_select[df_surf_select["id_surf"] == surf_id_bottom][["v_x", "v_y", "v_z"]]
-        np_verts_bottom = df_verts_bottom.to_numpy(dtype=np.int64)
-        ids_verts_bottom = np.unique(np_verts_bottom)
+        # # Read surface selection csv to find nodes that we want to fix in place
+        # col_names = ["id_surf", "v_x", "v_y", "v_z"]
+        # df_surf_select = pd.read_csv("../Assets/Thigh-pad/tets_coarse/surface_selections.txt", names=col_names, sep="\s+")
+        # surf_id_bottom = 1
+        # df_verts_bottom = df_surf_select[df_surf_select["id_surf"] == surf_id_bottom][["v_x", "v_y", "v_z"]]
+        # np_verts_bottom = df_verts_bottom.to_numpy(dtype=np.int64)
+        # ids_verts_bottom = np.unique(np_verts_bottom)
 
-        # Fix bottom surface particles in place — must zero mass AND clear ACTIVE flag,
-        # matching what add_cloth_grid does (builder.py:7156-7160).
-        # The VBD solver has kernels that check each condition independently.
-        self._fixed_particle_ids = [] # TODO - this should probably be a Set
-        for vert_id in ids_verts_bottom:
-            global_id = start_particle_idx + vert_id
-            # scene.particle_mass[global_id] = 0
-            # scene.particle_flags[global_id] = scene.particle_flags[global_id] & ~newton.ParticleFlags.ACTIVE
-            self._fixed_particle_ids.append(global_id) # For debug viz
-
-
-        # dim_x = 36
-        # dim_y = 24
-        # dim_z = 24
-        # cell_size = 0.005/3
-        # damping_values = [1.0e-5, 1.0e-3, 1.0e-2]
-
+        # # Fix bottom surface particles in place — must zero mass AND clear ACTIVE flag,
+        # # matching what add_cloth_grid does (builder.py:7156-7160).
+        # # The VBD solver has kernels that check each condition independently.
         # self._fixed_particle_ids = [] # TODO - this should probably be a Set
+        # for vert_id in ids_verts_bottom:
+        #     global_id = start_particle_idx + vert_id
+        #     scene.particle_mass[global_id] = 0
+        #     # scene.particle_flags[global_id] = scene.particle_flags[global_id] & ~newton.ParticleFlags.ACTIVE
+        #     self._fixed_particle_ids.append(global_id) # For debug viz
+
+
+        dim_x = 12
+        dim_y = 4
+        dim_z = 4
+        cell_size = 0.005
+
+        damping_values = [1.0e-6, 1.0e-4, 1.0e-3]
+        spacing = (dim_y + dim_y/3) * cell_size  # Space between grids along Y-axis is third of soft body width
+
+        self._fixed_particle_ids = [] # TODO - this should probably be a Set
         # for i, k_damp in enumerate(damping_values):
         #     idx_start_particle_i = len(scene.particle_q)
 
         #     y_offset = i * spacing
         #     scene.add_soft_grid(
-        #         pos=wp.vec3(-0.03, -0.03 + i*dim_y*cell_size*2, 0.03),
+        #         pos=wp.vec3(-0.03, -0.03, 0.02 + i*dim_z*cell_size*1.2),
         #         rot=wp.quat_identity(),
         #         vel=wp.vec3(0.0, 0.0, 0.0),
         #         dim_x=dim_x,
@@ -221,6 +213,27 @@ class ThighpadPokeTest:
         #         # fix_left=True,
         #     )
 
+        for i, k_damp in enumerate(damping_values):
+            idx_start_particle_i = len(scene.particle_q)
+
+            y_offset = i * spacing
+            scene.add_soft_grid(
+                pos=wp.vec3(-0.03, -0.1 + i*dim_y*cell_size*2, 0.06),
+                rot=wp.quat_identity(),
+                vel=wp.vec3(0.0, 0.0, 0.0),
+                dim_x=dim_x,
+                dim_y=dim_y,
+                dim_z=dim_z,
+                cell_x=cell_size,
+                cell_y=cell_size,
+                cell_z=cell_size,
+                density=1.0e3,
+                k_mu=1.0e5,
+                k_lambda=1.0e5,
+                k_damp=k_damp,
+                fix_left=True,
+            )
+
     def create_poker(self, scene):
         builder_poke_fixture = newton.ModelBuilder()
         path_poker = "./usd/thighpad_poke_fixture_onshape.usd"
@@ -235,7 +248,7 @@ class ThighpadPokeTest:
 
     def setup_debug_viz(self, model):
         # Build per-particle debug color array: blue for fixed, gray for free
-        debug_radius = self.particle_radius
+        debug_radius = 0.0005
         particle_color_default = [0.6, 0.6, 0.6] # Gray
         particle_color_fixed = [0.0, 0.0, 1.0] # Blue
 
@@ -273,19 +286,18 @@ class ThighpadPokeTest:
             self.state_next.clear_forces()
             self.viewer.apply_forces(self.state_now)
 
-            if not self.args["no_poke"]:
-                # # Featherstone as kinematic integrator (disable particles + gravity)
-                particle_count = self.model.particle_count
-                self.model.particle_count = 0
-                self.model.gravity.assign(self.gravity_zero)
-                self.model.shape_contact_pair_count = 0
+            # # Featherstone as kinematic integrator (disable particles + gravity)
+            particle_count = self.model.particle_count
+            self.model.particle_count = 0
+            self.model.gravity.assign(self.gravity_zero)
+            self.model.shape_contact_pair_count = 0
 
-                # # self.state_now.joint_qd.assign(self.target_joint_qd) # TODO - move joints
-                self.solver_rigid.step(self.state_now, self.state_next, self.control, None, self.sim_dt)
+            # # self.state_now.joint_qd.assign(self.target_joint_qd) # TODO - move joints
+            self.solver_rigid.step(self.state_now, self.state_next, self.control, None, self.sim_dt)
 
-                self.state_now.particle_f.zero_()
-                self.model.particle_count = particle_count
-                self.model.gravity.assign(self.gravity_earth)
+            self.state_now.particle_f.zero_()
+            self.model.particle_count = particle_count
+            self.model.gravity.assign(self.gravity_earth)
 
             # # TODO - look into what collision pipelines do
             self.model.collide(self.state_now, self.contacts)
@@ -305,7 +317,7 @@ class ThighpadPokeTest:
             time_period = 7
             press_start_dist = 0.000
             press_end_dist = -0.003
-            dist_to_top_surf = 0.094
+            dist_to_top_surf = 0.06
             stroke_depth = press_start_dist - press_end_dist
             offset = dist_to_top_surf - press_start_dist
 
