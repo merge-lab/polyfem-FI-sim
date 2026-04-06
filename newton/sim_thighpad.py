@@ -58,7 +58,9 @@ class ThighpadPokeTest:
             particle_vertex_contact_buffer_size=32,
             particle_edge_contact_buffer_size=64,
             particle_collision_detection_interval=-1,
-            particle_enable_tile_solve=False
+            particle_enable_tile_solve=False,
+            rigid_contact_k_start=1.0e5,
+            rigid_avbd_beta=1.0e6,
         )
 
         self.solver_rigid = None
@@ -80,6 +82,7 @@ class ThighpadPokeTest:
     def parse_args(self):
         parser = argparse.ArgumentParser()
         parser.add_argument("--no-poke", action="store_true", help="Skip loading the poke fixture")
+        parser.add_argument("--debug_particles", action="store_true", help="Show debug particles")
         return vars(parser.parse_args())
 
     def create_model(self):
@@ -137,8 +140,9 @@ class ThighpadPokeTest:
             Load the thigh pad and place it in the simulation scene
         """
         # Fetching thighpad asset using the USD ecosystem
-        modelpath_thighpad = "../Assets/Thigh-pad/tets_coarse/model.usda"
-        # modelpath_thighpad = "../Assets/Thigh-pad/tets_fine/model.usda"
+        # modelpath_thighpad = "../Assets/Thigh-pad/tets_coarse/model.usda"
+        modelpath_thighpad = "../Assets/Thigh-pad/tets_fine/model.usda"
+        # modelpath_thighpad = "../Assets/Thigh-pad/tets_finer/model.usda"
         stage_thighpad = Usd.Stage.Open(modelpath_thighpad)
         prim_thighpad = stage_thighpad.GetPrimAtPath("/root/Model/TetMesh")
         tetmesh_thighpad = newton.TetMesh.create_from_usd(prim_thighpad)
@@ -157,7 +161,7 @@ class ThighpadPokeTest:
         # quat_initial = wp.quat_identity()
         start_particle_idx = len(scene.particle_q)
         scene.add_soft_mesh(
-            pos         = wp.vec3(0.0, 0.0, 0.005),
+            pos         = wp.vec3(0.0, 0.0, 0.000),
             rot         = quat_initial,
             scale       = scale,
             vel         = wp.vec3(0.0, 0.0, 0.0),
@@ -165,7 +169,7 @@ class ThighpadPokeTest:
             density     = rho,
             k_mu        = k_mu,
             k_lambda    = k_lambda,
-            k_damp      = 1e-2,
+            k_damp      = 1e-4,
             tri_ke      = 0.0,
             tri_ka      = 0.0,
             tri_kd      = 0.0,
@@ -175,8 +179,9 @@ class ThighpadPokeTest:
 
         # Read surface selection csv to find nodes that we want to fix in place
         col_names = ["id_surf", "v_x", "v_y", "v_z"]
-        df_surf_select = pd.read_csv("../Assets/Thigh-pad/tets_coarse/surface_selections.txt", names=col_names, sep="\s+")
-        # df_surf_select = pd.read_csv("../Assets/Thigh-pad/tets_fine/surface_selections.txt", names=col_names, sep="\s+")
+        # df_surf_select = pd.read_csv("../Assets/Thigh-pad/tets_coarse/surface_selections.txt", names=col_names, sep="\s+")
+        df_surf_select = pd.read_csv("../Assets/Thigh-pad/tets_fine/surface_selections.txt", names=col_names, sep="\s+")
+        # df_surf_select = pd.read_csv("../Assets/Thigh-pad/tets_finer/surface_selections.txt", names=col_names, sep="\s+")
         surf_id_bottom = 1
         df_verts_bottom = df_surf_select[df_surf_select["id_surf"] == surf_id_bottom][["v_x", "v_y", "v_z"]]
         np_verts_bottom = df_verts_bottom.to_numpy(dtype=np.int64)
@@ -188,38 +193,9 @@ class ThighpadPokeTest:
         self._fixed_particle_ids = [] # TODO - this should probably be a Set
         for vert_id in ids_verts_bottom:
             global_id = start_particle_idx + vert_id
-            # scene.particle_mass[global_id] = 0
-            # scene.particle_flags[global_id] = scene.particle_flags[global_id] & ~newton.ParticleFlags.ACTIVE
+            scene.particle_mass[global_id] = 0
+            scene.particle_flags[global_id] = scene.particle_flags[global_id] & ~newton.ParticleFlags.ACTIVE
             self._fixed_particle_ids.append(global_id) # For debug viz
-
-
-        # dim_x = 36
-        # dim_y = 24
-        # dim_z = 24
-        # cell_size = 0.005/3
-        # damping_values = [1.0e-5, 1.0e-3, 1.0e-2]
-
-        # self._fixed_particle_ids = [] # TODO - this should probably be a Set
-        # for i, k_damp in enumerate(damping_values):
-        #     idx_start_particle_i = len(scene.particle_q)
-
-        #     y_offset = i * spacing
-        #     scene.add_soft_grid(
-        #         pos=wp.vec3(-0.03, -0.03 + i*dim_y*cell_size*2, 0.03),
-        #         rot=wp.quat_identity(),
-        #         vel=wp.vec3(0.0, 0.0, 0.0),
-        #         dim_x=dim_x,
-        #         dim_y=dim_y,
-        #         dim_z=dim_z,
-        #         cell_x=cell_size,
-        #         cell_y=cell_size,
-        #         cell_z=cell_size,
-        #         density=1.0e3,
-        #         k_mu=1.0e5,
-        #         k_lambda=1.0e5,
-        #         k_damp=k_damp,
-        #         # fix_left=True,
-        #     )
 
     def create_poker(self, scene):
         builder_poke_fixture = newton.ModelBuilder()
@@ -302,10 +278,10 @@ class ThighpadPokeTest:
 
     def step(self):
         if not self.args["no_poke"]:
-            time_period = 7
+            time_period = 0.25
             press_start_dist = 0.000
-            press_end_dist = -0.003
-            dist_to_top_surf = 0.094
+            press_end_dist = -0.005
+            dist_to_top_surf = 0.087    
             stroke_depth = press_start_dist - press_end_dist
             offset = dist_to_top_surf - press_start_dist
 
@@ -319,10 +295,6 @@ class ThighpadPokeTest:
         else:
             self.simulate()
 
-        # Diagnostic: print soft_contact_count every 60 frames
-        if self.frame % 60 == 0:
-            count = self.contacts.soft_contact_count.numpy()[0]
-            print(f"[frame {self.frame}] soft_contact_count = {count}, sim_time = {self.sim_time:.3f}")
 
     def run(self):
         while self.viewer.is_running():
@@ -335,12 +307,13 @@ class ThighpadPokeTest:
         self.viewer.begin_frame(self.sim_time)
         self.viewer.log_state(self.state_now)
         self.viewer.log_contacts(self.contacts, self.state_now)
-        self.viewer.log_points(
-            name="/debug/fixed_particles",
-            points=self.state_now.particle_q,
-            radii=self.particle_debug_radii,
-            colors=self.particle_debug_colors,
-        )
+        if self.args["debug_particles"]:
+            self.viewer.log_points(
+                name="/debug/fixed_particles",
+                points=self.state_now.particle_q,
+                radii=self.particle_debug_radii,
+                colors=self.particle_debug_colors,
+            )
         self.viewer.end_frame()
 
         
