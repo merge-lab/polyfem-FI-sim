@@ -9,18 +9,110 @@ from scipy.spatial import KDTree
 
 import warp as wp
 import newton
-import newton.examples
 from pxr import Usd, UsdGeom, Vt
 
 import matplotlib.pyplot as plt
 import argparse
 
+from dataclasses import dataclass
+
+@wp.func
+def tri_volume_contribution(
+    v0: wp.vec3,
+    v1: wp.vec3,
+    v2: wp.vec3,
+):
+    # Compute the signed volume of the tetrahedron with the 3 points + origin
+    vol = wp.dot(v0, wp.cross(v1, v2)) / 6.0  # tetra volume (0,v0,v1,v2)
+    return vol
+
+@wp.kernel
+def compute_solid_mesh_volume(
+    indices: wp.array[int],
+    vertices: wp.array[wp.vec3],
+    # outputs
+    volume: wp.array[float],
+):
+    i = wp.tid()
+    p = vertices[indices[i * 3 + 0]]
+    q = vertices[indices[i * 3 + 1]]
+    r = vertices[indices[i * 3 + 2]]
+
+    # Sum together the signed volumes of all tetrahedra created by each tri-face with origin
+    # The final volume will be the actual volume of the mesh
+    v = tri_volume_contribution(p, q, r)
+    wp.atomic_add(volume, 0, v)
+
+def compute_volume_mesh(
+    vertices: wp.array,
+    indices: wp.array,
+) -> float:
+    """
+    Compute the mass, center of mass, inertia, and volume of a triangular mesh.
+
+    Args:
+        vertices: A wp.array of vertex positions (3D coordinates).
+        indices: A wp.array of triangle indices (each triangle is defined by 3 vertex indices).
+
+    Returns:
+        A tuple containing:
+            - volume: The signed volume of the mesh.
+    """
+
+    indices = np.array(indices).flatten()
+    num_tris = len(indices) // 3
+    vol_warp = wp.zeros(1, dtype=float) # Preallocate output
+
+    wp_vertices = wp.array(vertices, dtype=wp.vec3)
+    wp_indices = wp.array(indices, dtype=int)
+
+    wp.launch(
+        kernel=compute_solid_mesh_volume,
+        dim=num_tris,
+        inputs=[
+            wp_indices,
+            wp_vertices,
+        ],
+        outputs=[
+            vol_warp,
+        ],
+    )
+    V_tot = float(vol_warp.numpy()[0])  # signed volume
+
+    # If the winding is inward, flip signs
+    if V_tot < 0: V_tot = -V_tot
+    return V_tot
+
+@dataclass
+class SimParams:
+    g = 9.81
+
+    ### Material parameters
+    # TODO move this to different section to handle multiple materials?
+    material_E = 1.0e6            # Young's modulus [N/m^2]
+    material_nu = 0.45            # Poisson's ratio [unitless]
+    material_rho = 1e3          # Density [kg/m^3]
+    # Get Lame parameters from Youngs modulus and Poisson's ratio
+    @property
+    def material_k_lambda(self):
+        return self.material_E * self.material_nu / ((1 + self.material_nu) * (1 - 2 * self.material_nu))
+    @property
+    def material_k_mu(self):
+        return self.material_E / (2 * (1 + self.material_nu))
+    material_k_damp = 1e-4
+
+    soft_contact_kd = 1e-7      # Soft contact param #TODO better docs
+    soft_contact_ke = 2e6       # Soft contact param
+    soft_contact_kf = 1         # Soft contact param
+    soft_contact_mu = 1.5       # Soft contact param
+
 class ThighpadPokeTest:
     def __init__(self, viewer, verbose=False):
+        self.sim_time = 0.0
+        self.sim_params = SimParams()
+
         # Setup simulation parameters
         self.fps = 60
-        self.frame = 0
-        self.sim_time = 0.0
         self.frame_dt = 1.0/self.fps                    # dt of each macro-step
         self.sim_steps = 60                             # # of macrosteps in sim
         self.sim_substeps = 10                          # # of substeps per macrostep
@@ -30,7 +122,7 @@ class ThighpadPokeTest:
         self.particle_radius = 0.0005 #1mm diameter
 
         self.gravity_zero = wp.zeros(1, dtype=wp.vec3)
-        self.gravity_earth = wp.array(wp.vec3(0.0, 0.0, -9.81), dtype=wp.vec3)
+        self.gravity_earth = wp.array(wp.vec3(0.0, 0.0, -self.sim_params.g), dtype=wp.vec3)
 
         self.verbose = verbose
         self.viewer = viewer
@@ -79,6 +171,11 @@ class ThighpadPokeTest:
         self.graph = None
         self.capture()
 
+        ### Initialize gui and logging
+        self.viewer.register_ui_callback(lambda ui: self.gui(ui), position="side")
+        
+        self.log_volumes: list[float] = []
+
     def parse_args(self):
         parser = argparse.ArgumentParser()
         parser.add_argument("--no-poke", action="store_true", help="Skip loading the poke fixture")
@@ -101,23 +198,17 @@ class ThighpadPokeTest:
             self.create_poker(self.scene)
 
         ## ======== Add ground plane =======
-        # TODO - understand the meaning of these numbers by looking at semi-implicit docs
-        # ke = 100
-        ke = 2e6
-        kf = 1
-        # kd = 0.0
-        kd = 1e-7
-        mu = 1.5
+        # TODO - understand the meaning of these numbers by looking at VBD docs
         # builder.add_ground_plane(cfg=newton.ModelBuilder.ShapeConfig(ke=ke, kf=kf, kd=kd, mu=mu))
         self.scene.add_ground_plane()
  
         ## ======== Finalize and export the model =======
         self.scene.color()
         model = self.scene.finalize()
-        model.soft_contact_ke = ke
-        model.soft_contact_kf = kf
-        model.soft_contact_kd = kd
-        model.soft_contact_mu = mu
+        model.soft_contact_ke = self.sim_params.soft_contact_ke
+        model.soft_contact_kf = self.sim_params.soft_contact_kf
+        model.soft_contact_kd = self.sim_params.soft_contact_kd
+        model.soft_contact_mu = self.sim_params.soft_contact_mu
 
         self.setup_debug_viz(model)
 
@@ -147,52 +238,50 @@ class ThighpadPokeTest:
         prim_thighpad = stage_thighpad.GetPrimAtPath("/root/Model/TetMesh")
         tetmesh_thighpad = newton.TetMesh.create_from_usd(prim_thighpad)
 
-        # Get Lame parameters from Youngs modulus and Poisson's ratio
-        E = 1e6 # Youngs modulus (Pa)
-        nu = 0.45 # Poisson's ratio
-        k_lambda = E * nu / ((1 + nu) * (1 - 2 * nu))
-        k_mu = E / (2 * (1 + nu))
-        rho = 1.0e3 # kg/m^3
-        scale = 1.0
-
-        print(f"k_lambda: {k_lambda}, k_mu: {k_mu}")
+        print(f"k_mu: {self.sim_params.material_k_mu}, k_lambda: {self.sim_params.material_k_lambda}")
 
         quat_initial = wp.quat_from_axis_angle(wp.vec3([1, 0, 0]), np.pi/2)
         # quat_initial = wp.quat_identity()
-        start_particle_idx = len(scene.particle_q)
+        self.pad_start_particle_idx = len(scene.particle_q)
         scene.add_soft_mesh(
             pos         = wp.vec3(0.0, 0.0, 0.000),
             rot         = quat_initial,
-            scale       = scale,
+            scale       = 1.0,
             vel         = wp.vec3(0.0, 0.0, 0.0),
             mesh        = tetmesh_thighpad,
-            density     = rho,
-            k_mu        = k_mu,
-            k_lambda    = k_lambda,
-            k_damp      = 1e-4,
+            density     = self.sim_params.material_rho,
+            k_mu        = self.sim_params.material_k_mu,
+            k_lambda    = self.sim_params.material_k_lambda,
+            # k_mu = 1e5,
+            # k_lambda = 1e5,
+            k_damp      = self.sim_params.material_k_damp,
             tri_ke      = 0.0,
             tri_ka      = 0.0,
             tri_kd      = 0.0,
             tri_drag    = 0.0,
             tri_lift    = 0.0,
+
         )
 
         # Read surface selection csv to find nodes that we want to fix in place
-        col_names = ["id_surf", "v_x", "v_y", "v_z"]
+        col_names = ["id_surf", "v_1", "v_2", "v_3"]
         # df_surf_select = pd.read_csv("../Assets/Thigh-pad/tets_coarse/surface_selections.txt", names=col_names, sep="\s+")
         df_surf_select = pd.read_csv("../Assets/Thigh-pad/tets_fine/surface_selections.txt", names=col_names, sep="\s+")
         # df_surf_select = pd.read_csv("../Assets/Thigh-pad/tets_finer/surface_selections.txt", names=col_names, sep="\s+")
         surf_id_bottom = 1
-        df_verts_bottom = df_surf_select[df_surf_select["id_surf"] == surf_id_bottom][["v_x", "v_y", "v_z"]]
+        df_verts_bottom = df_surf_select[df_surf_select["id_surf"] == surf_id_bottom][col_names[1:]]
         np_verts_bottom = df_verts_bottom.to_numpy(dtype=np.int64)
         ids_verts_bottom = np.unique(np_verts_bottom)
+
+        surf_id_channel = 2
+        self.ids_channel = df_surf_select[df_surf_select["id_surf"] == surf_id_channel][col_names[1:]].to_numpy(dtype=np.int64)
 
         # Fix bottom surface particles in place — must zero mass AND clear ACTIVE flag,
         # matching what add_cloth_grid does (builder.py:7156-7160).
         # The VBD solver has kernels that check each condition independently.
         self._fixed_particle_ids = [] # TODO - this should probably be a Set
         for vert_id in ids_verts_bottom:
-            global_id = start_particle_idx + vert_id
+            global_id = self.pad_start_particle_idx + vert_id
             scene.particle_mass[global_id] = 0
             scene.particle_flags[global_id] = scene.particle_flags[global_id] & ~newton.ParticleFlags.ACTIVE
             self._fixed_particle_ids.append(global_id) # For debug viz
@@ -287,6 +376,9 @@ class ThighpadPokeTest:
 
             z = offset + stroke_depth/2 * np.cos(self.sim_time* 2*np.pi / time_period + np.pi)
             v_joint_target_pos_np = z * np.ones(9)
+            # v_joint_target_pos_np = np.zeros(9)
+            # i_poke = 0
+            # v_joint_target_pos_np[i_poke] = z
             wp.copy(self.control.joint_target_pos, wp.array(v_joint_target_pos_np, dtype=wp.float32))
 
         if self.graph:
@@ -294,6 +386,8 @@ class ThighpadPokeTest:
             self.sim_time += self.sim_dt
         else:
             self.simulate()
+        
+        self._log_states()
 
 
     def run(self):
@@ -316,6 +410,30 @@ class ThighpadPokeTest:
             )
         self.viewer.end_frame()
 
+    def _log_states(self):
+        # Log the channel volume
+        idxs = self.pad_start_particle_idx + self.ids_channel
+        verts = self.state_now.particle_q[self.pad_start_particle_idx:]
+        channel_volume = compute_volume_mesh(verts, idxs)
+        self.log_volumes.append(channel_volume)
+
+    def gui(self, ui):
+        ui.text(f"Sim time: {self.sim_time}")
+        ui.text(f"Latest volume [cm^3]: {self.log_volumes[-1] * 100**3}")
+        ui.separator()
+
+        w = 250 # Number of past datapoints to plot
+        graph_size = ui.ImVec2(-1, 80)
+
+        def padded(data):
+            """Return a fixed-width array, zero-padded on the left if shorter than the window."""
+            arr = np.array(data[-w:], dtype=np.float32)
+            if len(arr) < w:
+                arr = np.pad(arr, (w - len(arr), 0))
+            return arr
+
+        ui.text("Channel volume")
+        ui.plot_lines("##iters", padded(self.log_volumes), graph_size=graph_size)
         
 
 if __name__ == "__main__":
