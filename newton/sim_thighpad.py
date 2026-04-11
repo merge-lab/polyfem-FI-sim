@@ -93,7 +93,7 @@ class SimParams:
     @property
     def material_k_mu(self):
         return self.material_E / (2 * (1 + self.material_nu))
-    material_k_damp = 1e-4
+    material_k_damp = 1e-6
 
     soft_contact_kd = 1e-7      # Soft contact param #TODO better docs
     soft_contact_ke = 2e6       # Soft contact param
@@ -120,7 +120,7 @@ class ThighpadPokeTest:
         # TODO move these to sim params as well?
         self.fps = 60
         self.frame_dt = 1.0/self.fps                    # dt of each macro-step
-        self.sim_steps = 60                             # # of macrosteps in sim
+        self.sim_steps = self.fps                             # # of macrosteps in sim
         self.sim_substeps = 10                          # # of substeps per macrostep
         self.iterations = 5 
         self.sim_dt = self.frame_dt / self.sim_substeps # dt of each substep
@@ -136,8 +136,9 @@ class ThighpadPokeTest:
         self.args = self.parse_args()
 
         # Create scene
-        init_z = -0.1 + 0.014 + 0.002
-        init_qs = init_z * wp.ones(9, dtype=wp.float32)
+        self.init_q = -0.1 + 0.014 + 0.002
+        self.current_q = self.init_q
+        init_qs = self.init_q * wp.ones(9, dtype=wp.float32)
         self.model = self.create_model(init_qs)
 
         # Initialize camera
@@ -150,8 +151,6 @@ class ThighpadPokeTest:
             model=self.model,
             iterations=self.iterations,
             integrate_with_external_rigid_solver=True,
-            # particle_enable_tile_solve=False,
-            # particle_enable_self_contact=False,
             particle_enable_self_contact=True,
             particle_self_contact_radius=0.0002,
             particle_self_contact_margin=0.0004,
@@ -166,7 +165,7 @@ class ThighpadPokeTest:
         self.solver_rigid = None
         if not self.args["no_poke"]:
             self.solver_rigid = newton.solvers.SolverMuJoCo(self.model)
-            self.poke_state = PokeState.INIT
+            self.poke_state = PokeState.DOWN
             self.t_poke_state_changed = self.sim_time
 
         # Preallocate variables for trajectory, control, and contacts
@@ -384,8 +383,8 @@ class ThighpadPokeTest:
 
 
     def step(self):
-        # if not self.args["no_poke"]:
-        #     self._control_poker()
+        if not self.args["no_poke"]:
+            self._control_poker()
 
         if self.graph:
             wp.capture_launch(self.graph)
@@ -397,69 +396,60 @@ class ThighpadPokeTest:
 
 
     def _control_poker(self):
-        # control_mask = wp.ones(9, dtype=wp.int32) # TODO - set this based on i select
 
-        # if self.poke_state == PokeState.INIT:
-        #     if self.state_now.joint_q[control_mask].numpy().max() >= 0.0863 - 0.0005:
-        #         # Poker reached top of pad, switch to compression test speed
-        #         self.poke_state = PokeState.DOWN
-        #         joint_vel = 0.0
-        #     else:
-        #         # Move poker z to 0.0863 at high speed
-        #         joint_vel = -0.02     
+        compression_rate = 0.02
+        z_zero = -0.0863
+        if self.poke_state == PokeState.DOWN:
+            if self.current_q <= z_zero - 0.002:
+                # If reached bottom out distance, switch to the 0.5sec hold
+                self.poke_state = PokeState.BOTTOM
+                joint_vel = 0.0
+                self.t_poke_state_changed = self.sim_time # Track last state change time
+            else:
+                # Compression rate in Gilbert test: 20mm / min
+                joint_vel = -compression_rate
 
-        # elif self.poke_state == PokeState.DOWN:
-        #     if self.state_now.joint_q[control_mask].numpy().max() >=  0.0883 - 0.0005:
-        #         # If reached bottom out distance, switch to the 0.5sec hold
-        #         self.poke_state = PokeState.BOTTOM
-        #         joint_vel = 0.0
-        #     else:
-        #         # Compression rate in Gilbert test: 20mm / min
-        #         joint_vel = -0.02 / 60     
+        elif self.poke_state == PokeState.BOTTOM:
+            if self.sim_time - self.t_poke_state_changed >= 0.5:
+                # Transition poke state if we have waited for long enough
+                self.poke_state = PokeState.UP
+                self.t_poke_state_changed = self.sim_time # Track last state change time
+            joint_vel = 0.0     # Wait until enough time has past since last state change
 
-        # elif self.poke_state == PokeState.BOTTOM:
-        #     if self.sim_time - self.t_poke_state_changed >= 0.5:
-        #         # Transition poke state if we have waited for long enough
-        #         self.poke_state = PokeState.UP
-        #     joint_vel = 0.0     # Wait until enough time has past since last state change
+        elif self.poke_state == PokeState.UP:
+            if self.current_q >= self.init_q:
+                # Stop the poke test once we have reached a higher height
+                self.poke_state = PokeState.STOP
+                joint_vel = 0.0
+            else:
+                joint_vel = compression_rate
 
-        # elif self.poke_state == PokeState.UP:
-        #     if self.state_now.joint_q[control_mask].numpy().min() <= 0.0843 + 0.0005:
-        #         # Stop the poke test once we have reached a higher height
-        #         self.poke_state = PokeState.STOP
-        #         joint_vel = 0.0
-        #     else:
-        #         joint_vel = 0.02 / 60       # Move up at 2mm/min until z<0.0843 
+        elif self.poke_state == PokeState.STOP:
+            print(f"End of poke test reached at sim time {self.sim_time}. Terminating sim")
+            self.viewer.close()
+            return
 
-        # else:
-        #     raise ValueError("Invalid poke state flag value")
+        else:
+            raise ValueError("Invalid poke state flag value")
 
-        # vels = -0.02/60 * wp.ones(9, dtype=wp.float32)
-        # self.control.joint_target_vel = -0.002 * wp.ones(9) # TODO shouldn't it be 0.02/60? Units are meters/second
+        controller_hz = self.frame_dt/self.sim_substeps
+        dq = joint_vel * controller_hz
+        self.current_q += dq
 
-        # wp.copy(self.control.joint_target_vel, wp.array(vels))
-        # self.control.joint_target_vel = joint_vel * wp.array(control_mask, dtype=wp.float32)
-
-
-        time_period = 0.25
-        press_start_dist = 0.000
-        press_end_dist = -0.005
-        dist_to_top_surf = -0.087    
-        stroke_depth = press_start_dist - press_end_dist
-        offset = dist_to_top_surf - press_start_dist
-
-        z = offset + stroke_depth/2 * np.cos(self.sim_time* 2*np.pi / time_period + np.pi)
+        # Set the selection array based on which poke ids are selected
         if self.args["i_poke"] == -1:
-            z = -0.0863 # Point where the bottom of the poker contacts the top of the thigh pad
-            v_joint_target_pos_np = z * np.ones(9)
+            control_mask = wp.ones(9, dtype=wp.float32)
         elif self.args["i_poke"] >= 0 and self.args["i_poke"] <= 8:
-            v_joint_target_pos_np = np.zeros(9)
-            v_joint_target_pos_np[self.args["i_poke"]] = z
+            control_mask = np.zeros(9, dtype=np.float32) 
+            control_mask[self.args["i_poke"]] = 1
+            control_mask = wp.array(control_mask, dtype=wp.float32)
         else:
             raise ValueError("Invalid poke index selected; value needs to be an integer between 0 and 8")
-        wp.copy(self.control.joint_target_pos, wp.array(v_joint_target_pos_np, dtype=wp.float32))
-        # breakpoint()
 
+        target_qs = self.current_q * control_mask.view(wp.float32)
+        wp.copy(self.control.joint_target_pos, wp.array(target_qs, dtype=wp.float32)) # Doing it this way is necessary! Otherwise weird things happen.
+
+        return
 
     def run(self):
         while self.viewer.is_running():
@@ -491,16 +481,17 @@ class ThighpadPokeTest:
     def gui(self, ui):
         ui.text(f"Sim time: {self.sim_time}")
         ui.text(f"Latest volume [cm^3]: {self.log_volumes[-1] * 100**3}")
+        ui.text(f"Poke state: {self.poke_state}")
         ui.separator()
 
         w = 250 # Number of past datapoints to plot
         graph_size = ui.ImVec2(-1, 80)
 
         def padded(data):
-            """Return a fixed-width array, zero-padded on the left if shorter than the window."""
+            """Return a fixed-width array, padded with first non-zero value if shorter than the window."""
             arr = np.array(data[-w:], dtype=np.float32)
             if len(arr) < w:
-                arr = np.pad(arr, (w - len(arr), 0))
+                arr = np.pad(arr, (w - len(arr), 0), mode="edge")
             return arr
 
         ui.text("Channel volume")
