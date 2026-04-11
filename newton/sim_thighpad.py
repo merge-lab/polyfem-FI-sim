@@ -1,20 +1,14 @@
-import numpy as np
-from scipy.spatial.transform import Rotation as rot
-
-import meshio
-
-# Used for mesh pre-processing
-import pandas as pd
-from scipy.spatial import KDTree
-
-import warp as wp
-import newton
-from pxr import Usd, UsdGeom, Vt
-
-import matplotlib.pyplot as plt
 import argparse
-
 from dataclasses import dataclass
+from enum import Enum
+
+import numpy as np
+import pandas as pd     # Used for mesh pre-processing
+
+import newton
+import warp as wp
+from pxr import Usd
+
 
 @wp.func
 def tri_volume_contribution(
@@ -106,12 +100,24 @@ class SimParams:
     soft_contact_kf = 1         # Soft contact param
     soft_contact_mu = 1.5       # Soft contact param
 
+class PokeState(Enum):
+    """
+        State flags for the state machine that moves the poker up and down
+    """
+    INIT = 0
+    TOP = 1
+    DOWN = 2
+    BOTTOM = 3
+    UP = 4
+    STOP = 5
+
 class ThighpadPokeTest:
     def __init__(self, viewer, verbose=False):
         self.sim_time = 0.0
         self.sim_params = SimParams()
 
         # Setup simulation parameters
+        # TODO move these to sim params as well?
         self.fps = 60
         self.frame_dt = 1.0/self.fps                    # dt of each macro-step
         self.sim_steps = 60                             # # of macrosteps in sim
@@ -130,7 +136,9 @@ class ThighpadPokeTest:
         self.args = self.parse_args()
 
         # Create scene
-        self.model = self.create_model()
+        init_z = -0.1 + 0.014 + 0.002
+        init_qs = init_z * wp.ones(9, dtype=wp.float32)
+        self.model = self.create_model(init_qs)
 
         # Initialize camera
         self.viewer.set_model(self.model)
@@ -158,11 +166,16 @@ class ThighpadPokeTest:
         self.solver_rigid = None
         if not self.args["no_poke"]:
             self.solver_rigid = newton.solvers.SolverMuJoCo(self.model)
+            self.poke_state = PokeState.INIT
+            self.t_poke_state_changed = self.sim_time
 
         # Preallocate variables for trajectory, control, and contacts
         self.state_now = self.model.state()
         self.state_next = self.model.state()
         self.control = self.model.control()
+
+        # Initialize configuration of poke fixture
+        self.control.joint_target_pos = init_qs
 
         # TODO - look into what collision_pipeline options do
         # self.model.collide(self.state_now, self.contacts)
@@ -180,9 +193,10 @@ class ThighpadPokeTest:
         parser = argparse.ArgumentParser()
         parser.add_argument("--no-poke", action="store_true", help="Skip loading the poke fixture")
         parser.add_argument("--debug_particles", action="store_true", help="Show debug particles")
+        parser.add_argument("--i_poke", default=-1, type=int, help="Which poker to push down. Defaults to (-1), which is 'all'")
         return vars(parser.parse_args())
 
-    def create_model(self):
+    def create_model(self, init_qs=None):
         """
             Create the simulation scene
         """
@@ -195,7 +209,7 @@ class ThighpadPokeTest:
 
         ## ======= Add poke fixture if not disabled =============
         if not self.args["no_poke"]:
-            self.create_poker(self.scene)
+            self.create_poker(self.scene, init_qs)
 
         ## ======== Add ground plane =======
         # TODO - understand the meaning of these numbers by looking at VBD docs
@@ -205,6 +219,9 @@ class ThighpadPokeTest:
         ## ======== Finalize and export the model =======
         self.scene.color()
         model = self.scene.finalize()
+
+        newton.eval_fk(model, model.joint_q, model.joint_qd, model)
+
         model.soft_contact_ke = self.sim_params.soft_contact_ke
         model.soft_contact_kf = self.sim_params.soft_contact_kf
         model.soft_contact_kd = self.sim_params.soft_contact_kd
@@ -286,7 +303,7 @@ class ThighpadPokeTest:
             scene.particle_flags[global_id] = scene.particle_flags[global_id] & ~newton.ParticleFlags.ACTIVE
             self._fixed_particle_ids.append(global_id) # For debug viz
 
-    def create_poker(self, scene):
+    def create_poker(self, scene, init_qs):
         builder_poke_fixture = newton.ModelBuilder()
         path_poker = "./usd/thighpad_poke_fixture_onshape.usd"
         builder_poke_fixture.add_usd(
@@ -296,6 +313,7 @@ class ThighpadPokeTest:
             enable_self_collisions=False,
             force_show_colliders=True,
         )
+        builder_poke_fixture.joint_q = init_qs.list()
         scene.add_world(builder_poke_fixture)
 
     def setup_debug_viz(self, model):
@@ -366,20 +384,8 @@ class ThighpadPokeTest:
 
 
     def step(self):
-        if not self.args["no_poke"]:
-            time_period = 0.25
-            press_start_dist = 0.000
-            press_end_dist = -0.005
-            dist_to_top_surf = 0.087    
-            stroke_depth = press_start_dist - press_end_dist
-            offset = dist_to_top_surf - press_start_dist
-
-            z = offset + stroke_depth/2 * np.cos(self.sim_time* 2*np.pi / time_period + np.pi)
-            v_joint_target_pos_np = z * np.ones(9)
-            # v_joint_target_pos_np = np.zeros(9)
-            # i_poke = 0
-            # v_joint_target_pos_np[i_poke] = z
-            wp.copy(self.control.joint_target_pos, wp.array(v_joint_target_pos_np, dtype=wp.float32))
+        # if not self.args["no_poke"]:
+        #     self._control_poker()
 
         if self.graph:
             wp.capture_launch(self.graph)
@@ -388,6 +394,71 @@ class ThighpadPokeTest:
             self.simulate()
         
         self._log_states()
+
+
+    def _control_poker(self):
+        # control_mask = wp.ones(9, dtype=wp.int32) # TODO - set this based on i select
+
+        # if self.poke_state == PokeState.INIT:
+        #     if self.state_now.joint_q[control_mask].numpy().max() >= 0.0863 - 0.0005:
+        #         # Poker reached top of pad, switch to compression test speed
+        #         self.poke_state = PokeState.DOWN
+        #         joint_vel = 0.0
+        #     else:
+        #         # Move poker z to 0.0863 at high speed
+        #         joint_vel = -0.02     
+
+        # elif self.poke_state == PokeState.DOWN:
+        #     if self.state_now.joint_q[control_mask].numpy().max() >=  0.0883 - 0.0005:
+        #         # If reached bottom out distance, switch to the 0.5sec hold
+        #         self.poke_state = PokeState.BOTTOM
+        #         joint_vel = 0.0
+        #     else:
+        #         # Compression rate in Gilbert test: 20mm / min
+        #         joint_vel = -0.02 / 60     
+
+        # elif self.poke_state == PokeState.BOTTOM:
+        #     if self.sim_time - self.t_poke_state_changed >= 0.5:
+        #         # Transition poke state if we have waited for long enough
+        #         self.poke_state = PokeState.UP
+        #     joint_vel = 0.0     # Wait until enough time has past since last state change
+
+        # elif self.poke_state == PokeState.UP:
+        #     if self.state_now.joint_q[control_mask].numpy().min() <= 0.0843 + 0.0005:
+        #         # Stop the poke test once we have reached a higher height
+        #         self.poke_state = PokeState.STOP
+        #         joint_vel = 0.0
+        #     else:
+        #         joint_vel = 0.02 / 60       # Move up at 2mm/min until z<0.0843 
+
+        # else:
+        #     raise ValueError("Invalid poke state flag value")
+
+        # vels = -0.02/60 * wp.ones(9, dtype=wp.float32)
+        # self.control.joint_target_vel = -0.002 * wp.ones(9) # TODO shouldn't it be 0.02/60? Units are meters/second
+
+        # wp.copy(self.control.joint_target_vel, wp.array(vels))
+        # self.control.joint_target_vel = joint_vel * wp.array(control_mask, dtype=wp.float32)
+
+
+        time_period = 0.25
+        press_start_dist = 0.000
+        press_end_dist = -0.005
+        dist_to_top_surf = -0.087    
+        stroke_depth = press_start_dist - press_end_dist
+        offset = dist_to_top_surf - press_start_dist
+
+        z = offset + stroke_depth/2 * np.cos(self.sim_time* 2*np.pi / time_period + np.pi)
+        if self.args["i_poke"] == -1:
+            z = -0.0863 # Point where the bottom of the poker contacts the top of the thigh pad
+            v_joint_target_pos_np = z * np.ones(9)
+        elif self.args["i_poke"] >= 0 and self.args["i_poke"] <= 8:
+            v_joint_target_pos_np = np.zeros(9)
+            v_joint_target_pos_np[self.args["i_poke"]] = z
+        else:
+            raise ValueError("Invalid poke index selected; value needs to be an integer between 0 and 8")
+        wp.copy(self.control.joint_target_pos, wp.array(v_joint_target_pos_np, dtype=wp.float32))
+        # breakpoint()
 
 
     def run(self):
