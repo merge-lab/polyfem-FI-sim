@@ -70,8 +70,7 @@ class ThighpadPokeTest:
         """
         # Initialize the scene
         self.scene = newton.ModelBuilder()
-        self.scene.default_particle_radius = 0.0005
-        self.viewer._cam_speed = 0.1
+        self.scene.default_particle_radius = 0.005
 
         ## ======= Add thigh pad =============
         # Fetching thighpad asset using the USD ecosystem
@@ -200,8 +199,8 @@ class ThighpadPokeTest:
 
 
     def step(self):
-        time_period = 2
-        z = 0.004 * np.sin(self.sim_time* 2*np.pi / time_period) + 0.085
+        time_period = 10
+        z = 0.002 * np.sin(self.sim_time* 2*np.pi / time_period) + 0.084
         v_joint_target_pos_np = z * np.ones(9) 
         wp.copy(self.control.joint_target_pos, wp.array(v_joint_target_pos_np, dtype=wp.float32))
 

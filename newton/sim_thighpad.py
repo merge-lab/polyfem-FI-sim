@@ -152,12 +152,10 @@ class ThighpadPokeTest:
             iterations=self.iterations,
             integrate_with_external_rigid_solver=True,
             particle_enable_self_contact=True,
-            particle_self_contact_radius=0.0002,
-            particle_self_contact_margin=0.0004,
-            particle_vertex_contact_buffer_size=32,
-            particle_edge_contact_buffer_size=64,
-            particle_collision_detection_interval=-1,
-            particle_enable_tile_solve=False,
+            particle_self_contact_radius=0.0001,
+            particle_self_contact_margin=0.0003,
+            # particle_collision_detection_interval=-1,
+            particle_collision_detection_interval=0,
             rigid_contact_k_start=1.0e5,
             rigid_avbd_beta=1.0e6,
         )
@@ -214,10 +212,18 @@ class ThighpadPokeTest:
         # TODO - understand the meaning of these numbers by looking at VBD docs
         # builder.add_ground_plane(cfg=newton.ModelBuilder.ShapeConfig(ke=ke, kf=kf, kd=kd, mu=mu))
         self.scene.add_ground_plane()
+
+        ## ========= Make world replicas
+        replicator = newton.ModelBuilder()
+        n_worlds = 1
+        replicator.replicate(self.scene, n_worlds, spacing=(0.2, 0.2, 0.0))
+
  
         ## ======== Finalize and export the model =======
-        self.scene.color()
-        model = self.scene.finalize()
+        # self.scene.color()
+        # model = self.scene.finalize()
+        replicator.color()
+        model = replicator.finalize()
 
         newton.eval_fk(model, model.joint_q, model.joint_qd, model)
 
@@ -247,8 +253,8 @@ class ThighpadPokeTest:
             Load the thigh pad and place it in the simulation scene
         """
         # Fetching thighpad asset using the USD ecosystem
-        # modelpath_thighpad = "../Assets/Thigh-pad/tets_coarse/model.usda"
-        modelpath_thighpad = "../Assets/Thigh-pad/tets_fine/model.usda"
+        modelpath_thighpad = "../Assets/Thigh-pad/tets_coarse/model.usda"
+        # modelpath_thighpad = "../Assets/Thigh-pad/tets_fine/model.usda"
         # modelpath_thighpad = "../Assets/Thigh-pad/tets_finer/model.usda"
         stage_thighpad = Usd.Stage.Open(modelpath_thighpad)
         prim_thighpad = stage_thighpad.GetPrimAtPath("/root/Model/TetMesh")
@@ -281,8 +287,8 @@ class ThighpadPokeTest:
 
         # Read surface selection csv to find nodes that we want to fix in place
         col_names = ["id_surf", "v_1", "v_2", "v_3"]
-        # df_surf_select = pd.read_csv("../Assets/Thigh-pad/tets_coarse/surface_selections.txt", names=col_names, sep="\s+")
-        df_surf_select = pd.read_csv("../Assets/Thigh-pad/tets_fine/surface_selections.txt", names=col_names, sep="\s+")
+        df_surf_select = pd.read_csv("../Assets/Thigh-pad/tets_coarse/surface_selections.txt", names=col_names, sep="\s+")
+        # df_surf_select = pd.read_csv("../Assets/Thigh-pad/tets_fine/surface_selections.txt", names=col_names, sep="\s+")
         # df_surf_select = pd.read_csv("../Assets/Thigh-pad/tets_finer/surface_selections.txt", names=col_names, sep="\s+")
         surf_id_bottom = 1
         df_verts_bottom = df_surf_select[df_surf_select["id_surf"] == surf_id_bottom][col_names[1:]]
@@ -421,13 +427,16 @@ class ThighpadPokeTest:
                 # Stop the poke test once we have reached a higher height
                 self.poke_state = PokeState.STOP
                 joint_vel = 0.0
+                self.t_poke_state_changed = self.sim_time # Track last state change time
             else:
                 joint_vel = compression_rate
 
         elif self.poke_state == PokeState.STOP:
-            print(f"End of poke test reached at sim time {self.sim_time}. Terminating sim")
-            self.viewer.close()
-            return
+            if self.sim_time - self.t_poke_state_changed >= 0.15:
+                # Wait 0.15sec before terminating the sim
+                print(f"End of poke test reached at sim time {self.sim_time}. Terminating sim")
+                self.viewer.close()
+            joint_vel = 0.0
 
         else:
             raise ValueError("Invalid poke state flag value")
