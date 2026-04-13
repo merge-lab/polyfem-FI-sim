@@ -319,9 +319,7 @@ class ThighpadPokeTest:
 
     def create_poker(self, scene, init_qs):
         builder_poke_fixture = newton.ModelBuilder()
-        path_poker = "./usd/thighpad_poke_fixture_onshape.usd"
-        # path_poker = "../Assets/usd/nine_poke_fixture/thighpad_poke_fixture_onshape_FLATTENED.usd"
-        # path_poker = "../Assets/usd/nine_poke_fixture/poke_fixture_FLATTENED_copy.usd"
+        path_poker = "./usd/poke_fixture_FLATTENED.usd"
 
         builder_poke_fixture.add_usd(
             path_poker,
@@ -330,6 +328,7 @@ class ThighpadPokeTest:
             enable_self_collisions=False,
             force_show_colliders=True,
         )
+        breakpoint()
         builder_poke_fixture.joint_q = init_qs.list()
         scene.add_world(builder_poke_fixture)
 
@@ -502,16 +501,14 @@ class ThighpadPokeTest:
         dq = joint_vel * controller_hz
         self.current_q += dq
 
-        self.current_q = z_zero
-
         # Set the selection array based on which poke ids are selected
         if self.args["i_poke"] == -1:
-            control_mask = wp.ones(9, dtype=wp.float32)
+            # control_mask = wp.ones(9, dtype=wp.float32)
             
             # Set the motion for the currently active poker
-            # control_mask = np.zeros(9, dtype=np.float32)
-            # control_mask[self.i_current_poke] = 1
-            # control_mask = wp.array(control_mask)
+            control_mask = np.zeros(9, dtype=np.float32)
+            control_mask[self.i_current_poke] = 1
+            control_mask = wp.array(control_mask)
         elif self.args["i_poke"] >= 0 and self.args["i_poke"] <= 8:
             control_mask = np.zeros(9, dtype=np.float32) 
             control_mask[self.args["i_poke"]] = 1
