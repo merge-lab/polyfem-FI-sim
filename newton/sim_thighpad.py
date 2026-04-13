@@ -137,6 +137,7 @@ class ThighpadPokeTest:
 
         # Create scene
         self.init_q = -0.1 + 0.014 + 0.002
+        # self.init_q = 0.0
         self.current_q = self.init_q
         init_qs = self.init_q * wp.ones(9, dtype=wp.float32)
         self.model = self.create_model(init_qs)
@@ -207,6 +208,7 @@ class ThighpadPokeTest:
         ## ======= Add poke fixture if not disabled =============
         if not self.args["no_poke"]:
             self.create_poker(self.scene, init_qs)
+            # self.create_poker_primitives(self.scene, 0.05)
 
         ## ======== Add ground plane =======
         # TODO - understand the meaning of these numbers by looking at VBD docs
@@ -311,6 +313,9 @@ class ThighpadPokeTest:
     def create_poker(self, scene, init_qs):
         builder_poke_fixture = newton.ModelBuilder()
         path_poker = "./usd/thighpad_poke_fixture_onshape.usd"
+        # path_poker = "../Assets/usd/nine_poke_fixture/thighpad_poke_fixture_onshape_FLATTENED.usd"
+        # path_poker = "../Assets/usd/nine_poke_fixture/poke_fixture_FLATTENED_copy.usd"
+
         builder_poke_fixture.add_usd(
             path_poker,
             # For some reason the origin of the poke fixture usd is at Poke 6 (-x, +y corner)
@@ -320,6 +325,44 @@ class ThighpadPokeTest:
         )
         builder_poke_fixture.joint_q = init_qs.list()
         scene.add_world(builder_poke_fixture)
+
+    def create_poker_primitives(self, scene, init_z):
+        # NOTE - UNUSED. Leaving here for reference in case we want to use it someday.
+        X_SPACING = 0.025117
+        Y_SPACING = 0.025117
+        R_POKER = 0.007/2
+        HALF_H_POKER = 0.01
+        x_posns = X_SPACING * np.array([-1, 0, 1])
+        y_posns = Y_SPACING * np.array([-1, 0, 1])
+        Xs, Ys = np.meshgrid(x_posns, y_posns)
+        self.poker_links = []
+        self.poker_joints = []
+        i_poker = 0
+        for i in range(3):
+            for j in range(3):
+                name_ij = f"Poker_{i_poker}"
+                posn_ij = wp.vec3([Xs[i, j], Ys[i, j], init_z])
+                # poker_ij_body = scene.add_body(
+                #     xform=wp.transform(p=posn_ij, q=wp.quat_identity()),
+                #     label=f"Poker_{i_poker}",
+                #     is_kinematic=True
+                # )
+                xform_ij = wp.transform(p=posn_ij, q=wp.quat_identity())
+                poker_ij_link = scene.add_link(xform=xform_ij, mass=15.0, is_kinematic=True, label=name_ij)
+                scene.add_shape_cylinder(poker_ij_link, radius=R_POKER, half_height=HALF_H_POKER)
+                joint_ij = scene.add_joint_prismatic(
+                    parent=-1,
+                    child=poker_ij_link,
+                    axis=newton.Axis.Z,
+                    parent_xform=xform_ij,
+                    label=name_ij+"_joint"
+                )
+                scene.add_articulation([joint_ij], label=name_ij+"_art")
+
+                self.poker_links.append(poker_ij_link)
+                self.poker_joints.append(joint_ij)
+                
+                i_poker += 0
 
     def setup_debug_viz(self, model):
         # Build per-particle debug color array: blue for fixed, gray for free
@@ -456,7 +499,9 @@ class ThighpadPokeTest:
             raise ValueError("Invalid poke index selected; value needs to be an integer between 0 and 8")
 
         target_qs = self.current_q * control_mask.view(wp.float32)
-        wp.copy(self.control.joint_target_pos, wp.array(target_qs, dtype=wp.float32)) # Doing it this way is necessary! Otherwise weird things happen.
+        target_qds = dq * control_mask.view(wp.float32)
+        wp.copy(self.state_now.joint_q, wp.array(target_qs, dtype=wp.float32))
+        wp.copy(self.state_now.joint_qd, wp.array(target_qds, dtype=wp.float32))
 
         return
 
