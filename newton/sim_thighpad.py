@@ -1,6 +1,7 @@
 import argparse
 from dataclasses import dataclass
 from enum import Enum
+import time
 
 import numpy as np
 import pandas as pd     # Used for mesh pre-processing
@@ -124,8 +125,9 @@ class ThighpadPokeTest:
         self.sim_substeps = 10                          # # of substeps per macrostep
         self.iterations = 5 
         self.sim_dt = self.frame_dt / self.sim_substeps # dt of each substep
+        self.sim_start_time = 0.0
 
-        self.particle_radius = 0.0005 #1mm diameter
+        self.particle_radius = 0.0002 #0.4mm diameter
 
         self.gravity_zero = wp.zeros(1, dtype=wp.vec3)
         self.gravity_earth = wp.array(wp.vec3(0.0, 0.0, -self.sim_params.g), dtype=wp.vec3)
@@ -166,6 +168,8 @@ class ThighpadPokeTest:
             self.solver_rigid = newton.solvers.SolverMuJoCo(self.model)
             self.poke_state = PokeState.DOWN
             self.t_poke_state_changed = self.sim_time
+            if self.args["i_poke"] == -1:
+                self.i_current_poke = 0
 
         # Preallocate variables for trajectory, control, and contacts
         self.state_now = self.model.state()
@@ -186,6 +190,9 @@ class ThighpadPokeTest:
         self.viewer.register_ui_callback(lambda ui: self.gui(ui), position="side")
         
         self.log_volumes: list[float] = []
+        self.log_pokes:     list[int] = []
+        self.log_sim_times: list[float] = []
+
 
     def parse_args(self):
         parser = argparse.ArgumentParser()
@@ -255,8 +262,8 @@ class ThighpadPokeTest:
             Load the thigh pad and place it in the simulation scene
         """
         # Fetching thighpad asset using the USD ecosystem
-        modelpath_thighpad = "../Assets/Thigh-pad/tets_coarse/model.usda"
-        # modelpath_thighpad = "../Assets/Thigh-pad/tets_fine/model.usda"
+        # modelpath_thighpad = "../Assets/Thigh-pad/tets_coarse/model.usda"
+        modelpath_thighpad = "../Assets/Thigh-pad/tets_fine/model.usda"
         # modelpath_thighpad = "../Assets/Thigh-pad/tets_finer/model.usda"
         stage_thighpad = Usd.Stage.Open(modelpath_thighpad)
         prim_thighpad = stage_thighpad.GetPrimAtPath("/root/Model/TetMesh")
@@ -289,8 +296,8 @@ class ThighpadPokeTest:
 
         # Read surface selection csv to find nodes that we want to fix in place
         col_names = ["id_surf", "v_1", "v_2", "v_3"]
-        df_surf_select = pd.read_csv("../Assets/Thigh-pad/tets_coarse/surface_selections.txt", names=col_names, sep="\s+")
-        # df_surf_select = pd.read_csv("../Assets/Thigh-pad/tets_fine/surface_selections.txt", names=col_names, sep="\s+")
+        # df_surf_select = pd.read_csv("../Assets/Thigh-pad/tets_coarse/surface_selections.txt", names=col_names, sep="\s+")
+        df_surf_select = pd.read_csv("../Assets/Thigh-pad/tets_fine/surface_selections.txt", names=col_names, sep="\s+")
         # df_surf_select = pd.read_csv("../Assets/Thigh-pad/tets_finer/surface_selections.txt", names=col_names, sep="\s+")
         surf_id_bottom = 1
         df_verts_bottom = df_surf_select[df_surf_select["id_surf"] == surf_id_bottom][col_names[1:]]
@@ -446,10 +453,11 @@ class ThighpadPokeTest:
 
     def _control_poker(self):
 
+        z_zero = -0.0855
         compression_rate = 0.02
-        z_zero = -0.0863
+        compression_depth = 0.003
         if self.poke_state == PokeState.DOWN:
-            if self.current_q <= z_zero - 0.002:
+            if self.current_q <= z_zero - compression_depth:
                 # If reached bottom out distance, switch to the 0.5sec hold
                 self.poke_state = PokeState.BOTTOM
                 joint_vel = 0.0
@@ -476,9 +484,15 @@ class ThighpadPokeTest:
 
         elif self.poke_state == PokeState.STOP:
             if self.sim_time - self.t_poke_state_changed >= 0.15:
-                # Wait 0.15sec before terminating the sim
-                print(f"End of poke test reached at sim time {self.sim_time}. Terminating sim")
-                self.viewer.close()
+                # Wait 0.15sec before advancing
+                self.i_current_poke += 1 # Advance to next poke
+                if self.i_current_poke >= 9:
+                    self.terminate()
+                    return
+                else:
+                    # Begin the next poke
+                    self.poke_state = PokeState.DOWN
+
             joint_vel = 0.0
 
         else:
@@ -488,13 +502,20 @@ class ThighpadPokeTest:
         dq = joint_vel * controller_hz
         self.current_q += dq
 
+        self.current_q = z_zero
+
         # Set the selection array based on which poke ids are selected
         if self.args["i_poke"] == -1:
             control_mask = wp.ones(9, dtype=wp.float32)
+            
+            # Set the motion for the currently active poker
+            # control_mask = np.zeros(9, dtype=np.float32)
+            # control_mask[self.i_current_poke] = 1
+            # control_mask = wp.array(control_mask)
         elif self.args["i_poke"] >= 0 and self.args["i_poke"] <= 8:
             control_mask = np.zeros(9, dtype=np.float32) 
             control_mask[self.args["i_poke"]] = 1
-            control_mask = wp.array(control_mask, dtype=wp.float32)
+            control_mask = wp.array(control_mask)
         else:
             raise ValueError("Invalid poke index selected; value needs to be an integer between 0 and 8")
 
@@ -506,6 +527,7 @@ class ThighpadPokeTest:
         return
 
     def run(self):
+        self.sim_start_time = time.time()
         while self.viewer.is_running():
             if not self.viewer.is_paused():
                 self.step()
@@ -531,8 +553,11 @@ class ThighpadPokeTest:
         verts = self.state_now.particle_q[self.pad_start_particle_idx:]
         channel_volume = compute_volume_mesh(verts, idxs)
         self.log_volumes.append(channel_volume)
+        self.log_sim_times.append(self.sim_time)
+        self.log_pokes.append(self.i_current_poke)
 
     def gui(self, ui):
+        ui.text(f"Wall time: {time.time() - self.sim_start_time}")
         ui.text(f"Sim time: {self.sim_time}")
         ui.text(f"Latest volume [cm^3]: {self.log_volumes[-1] * 100**3}")
         ui.text(f"Poke state: {self.poke_state}")
@@ -550,6 +575,19 @@ class ThighpadPokeTest:
 
         ui.text("Channel volume")
         ui.plot_lines("##iters", padded(self.log_volumes), graph_size=graph_size)
+    
+    def terminate(self):
+        # End the simulation because we've done all 9 pokes
+        print(f"End of poke test reached at sim time {self.sim_time}, elapsed wall time {time.time() - self.sim_start_time:.2f}. Terminating sim")
+        self.viewer.close()
+
+        # Save log_sim_times, log_volumes, and i_pokes to a csv
+        df_out = pd.DataFrame({
+            "sim_times_s": self.log_sim_times,
+            "volumes_cm3": self.log_volumes,
+            "i_poke": self.log_pokes
+        })
+        df_out.to_csv("./sim_outputs.csv")
         
 
 if __name__ == "__main__":

@@ -10,11 +10,12 @@ dependencies = [
     "meshio>=5.3.5",
     "newton[examples]",
     "pandas>=2.3.3",
+    "plotly>=6.6.0",
     "scipy>=1.15.3",
 ]
 
 [tool.uv.sources]
-newton = { path = "../../newton", editable = true }
+newton = { path = "../newton", editable = true }
 
 [[tool.uv.index]]
 url = "https://pypi.org/simple"
