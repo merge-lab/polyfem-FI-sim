@@ -2,6 +2,7 @@ import argparse
 from dataclasses import dataclass
 from enum import Enum
 import time
+from datetime import datetime
 
 import numpy as np
 import pandas as pd     # Used for mesh pre-processing
@@ -94,7 +95,7 @@ class SimParams:
     @property
     def material_k_mu(self):
         return self.material_E / (2 * (1 + self.material_nu))
-    material_k_damp = 1e-6
+    material_k_damp = 1e-4
 
     soft_contact_kd = 1e-7      # Soft contact param #TODO better docs
     soft_contact_ke = 2e6       # Soft contact param
@@ -155,10 +156,9 @@ class ThighpadPokeTest:
             iterations=self.iterations,
             integrate_with_external_rigid_solver=True,
             particle_enable_self_contact=True,
-            particle_self_contact_radius=0.0001,
-            particle_self_contact_margin=0.0003,
-            # particle_collision_detection_interval=-1,
-            particle_collision_detection_interval=0,
+            particle_self_contact_radius=0.0002,
+            particle_self_contact_margin=0.0004,
+            particle_collision_detection_interval=-1,
             rigid_contact_k_start=1.0e5,
             rigid_avbd_beta=1.0e6,
         )
@@ -452,8 +452,10 @@ class ThighpadPokeTest:
     def _control_poker(self):
 
         z_zero = -0.0855
-        compression_rate = 0.02/60
+        # compression_rate = 0.02/60
+        compression_rate = 0.02
         compression_depth = 0.002
+        t_hold = 0.2
         if self.poke_state == PokeState.DOWN:
             if self.current_q <= z_zero - compression_depth:
                 # If reached bottom out distance, switch to the 0.5sec hold
@@ -465,7 +467,7 @@ class ThighpadPokeTest:
                 joint_vel = -compression_rate
 
         elif self.poke_state == PokeState.BOTTOM:
-            if self.sim_time - self.t_poke_state_changed >= 0.5:
+            if self.sim_time - self.t_poke_state_changed >= t_hold:
                 # Transition poke state if we have waited for long enough
                 self.poke_state = PokeState.UP
                 self.t_poke_state_changed = self.sim_time # Track last state change time
@@ -578,12 +580,14 @@ class ThighpadPokeTest:
         self.viewer.close()
 
         # Save log_sim_times, log_volumes, and i_pokes to a csv
+        now = datetime.now()
+        now_str = now.strftime("%d-%m-%Y_%H:%M:%S")
         df_out = pd.DataFrame({
             "sim_times_s": self.log_sim_times,
             "volumes_cm3": self.log_volumes,
             "i_poke": self.log_pokes
         })
-        df_out.to_csv("./sim_outputs.csv")
+        df_out.to_csv(f"./sim-outputs_{now_str}.csv")
         
 
 if __name__ == "__main__":
