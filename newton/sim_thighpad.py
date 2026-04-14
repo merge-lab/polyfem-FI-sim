@@ -138,7 +138,7 @@ class ThighpadPokeTest:
         self.args = self.parse_args()
 
         # Create scene
-        self.init_q = -0.1 + 0.014 + 0.002
+        self.init_q = -0.0855 + 0.0005
         # self.init_q = 0.0
         self.current_q = self.init_q
         init_qs = self.init_q * wp.ones(9, dtype=wp.float32)
@@ -328,7 +328,6 @@ class ThighpadPokeTest:
             enable_self_collisions=False,
             force_show_colliders=True,
         )
-        breakpoint()
         builder_poke_fixture.joint_q = init_qs.list()
         scene.add_world(builder_poke_fixture)
 
@@ -453,8 +452,8 @@ class ThighpadPokeTest:
     def _control_poker(self):
 
         z_zero = -0.0855
-        compression_rate = 0.02
-        compression_depth = 0.003
+        compression_rate = 0.02/60
+        compression_depth = 0.002
         if self.poke_state == PokeState.DOWN:
             if self.current_q <= z_zero - compression_depth:
                 # If reached bottom out distance, switch to the 0.5sec hold
