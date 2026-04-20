@@ -102,6 +102,15 @@ class SimParams:
     soft_contact_kf = 1         # Soft contact param
     soft_contact_mu = 1.5       # Soft contact param
 
+    # Motion parameters
+    z_zero = -0.0855
+    # compression_rate = 0.02/60
+    compression_rate = 0.02
+    compression_depth = 0.002
+    t_start_wait = 0.1
+    t_hold = 0.2
+    t_stop_wait = 0.15
+
 class PokeState(Enum):
     """
         State flags for the state machine that moves the poker up and down
@@ -189,9 +198,11 @@ class ThighpadPokeTest:
         ### Initialize gui and logging
         self.viewer.register_ui_callback(lambda ui: self.gui(ui), position="side")
         
-        self.log_volumes: list[float] = []
-        self.log_pokes:     list[int] = []
+        self.vol_initial = -1
         self.log_sim_times: list[float] = []
+        self.log_volumes: list[float] = []
+        self.log_pressures: list[float] = []
+        self.log_pokes:     list[int] = []
 
 
     def parse_args(self):
@@ -451,23 +462,22 @@ class ThighpadPokeTest:
 
     def _control_poker(self):
 
-        z_zero = -0.0855
-        # compression_rate = 0.02/60
-        compression_rate = 0.02
-        compression_depth = 0.002
-        t_hold = 0.2
         if self.poke_state == PokeState.DOWN:
-            if self.current_q <= z_zero - compression_depth:
-                # If reached bottom out distance, switch to the 0.5sec hold
-                self.poke_state = PokeState.BOTTOM
+            if self.sim_time < self.sim_params.t_start_wait:
+                # Hold for a bit at the start to let signal stabilize
                 joint_vel = 0.0
-                self.t_poke_state_changed = self.sim_time # Track last state change time
             else:
-                # Compression rate in Gilbert test: 20mm / min
-                joint_vel = -compression_rate
+                if self.current_q <= self.sim_params.z_zero - self.sim_params.compression_depth:
+                    # If reached bottom out distance, switch to the 0.5sec hold
+                    self.poke_state = PokeState.BOTTOM
+                    joint_vel = 0.0
+                    self.t_poke_state_changed = self.sim_time # Track last state change time
+                else:
+                    # Compression rate in Gilbert test: 20mm / min
+                    joint_vel = -self.sim_params.compression_rate
 
         elif self.poke_state == PokeState.BOTTOM:
-            if self.sim_time - self.t_poke_state_changed >= t_hold:
+            if self.sim_time - self.t_poke_state_changed >= self.sim_params.t_hold:
                 # Transition poke state if we have waited for long enough
                 self.poke_state = PokeState.UP
                 self.t_poke_state_changed = self.sim_time # Track last state change time
@@ -480,10 +490,10 @@ class ThighpadPokeTest:
                 joint_vel = 0.0
                 self.t_poke_state_changed = self.sim_time # Track last state change time
             else:
-                joint_vel = compression_rate
+                joint_vel = self.sim_params.compression_rate
 
         elif self.poke_state == PokeState.STOP:
-            if self.sim_time - self.t_poke_state_changed >= 0.15:
+            if self.sim_time - self.t_poke_state_changed >= self.sim_params.t_stop_wait:
                 # Wait 0.15sec before advancing
                 self.i_current_poke += 1 # Advance to next poke
                 if self.i_current_poke >= 9:
@@ -546,11 +556,31 @@ class ThighpadPokeTest:
         self.viewer.end_frame()
 
     def _log_states(self):
+
+        tube_diameter = 0.0254/16       # 1/16" in meters
+        tube_length = 576.22 / 1e3      # 576.22mm in meters
+        tube_vol = (wp.PI * (tube_diameter/2)**2) * tube_length
+
         # Log the channel volume
-        idxs = self.pad_start_particle_idx + self.ids_channel
-        verts = self.state_now.particle_q[self.pad_start_particle_idx:]
-        channel_volume = compute_volume_mesh(verts, idxs)
-        self.log_volumes.append(channel_volume)
+        if self.sim_time >= self.sim_params.t_start_wait:
+            # Get channel volume
+            idxs = self.pad_start_particle_idx + self.ids_channel
+            verts = self.state_now.particle_q[self.pad_start_particle_idx:]
+            channel_volume = compute_volume_mesh(verts, idxs)
+            self.log_volumes.append(channel_volume)
+
+            if self.vol_initial == -1:
+                self.vol_initial = channel_volume
+
+            # Compute channel pressure using ideal gas laws
+            # p1 * v1 = p2 * v2
+            # So p2 = p1 * v1/v2
+            p_now = 1 * (self.vol_initial + tube_vol) / (channel_volume + tube_vol)
+            self.log_pressures.append(p_now)
+
+        else:
+            self.log_volumes.append(0.0)
+            self.log_pressures.append(0.0)
         self.log_sim_times.append(self.sim_time)
         self.log_pokes.append(self.i_current_poke)
 
@@ -584,10 +614,11 @@ class ThighpadPokeTest:
         now_str = now.strftime("%d-%m-%Y_%H:%M:%S")
         df_out = pd.DataFrame({
             "sim_times_s": self.log_sim_times,
-            "volumes_cm3": self.log_volumes,
+            "volumes_m3": self.log_volumes,
+            "pressures_atm": self.log_pressures,
             "i_poke": self.log_pokes
         })
-        df_out.to_csv(f"./sim-outputs_{now_str}.csv")
+        df_out.to_csv(f"./logs/sim-outputs_{now_str}.csv")
         
 
 if __name__ == "__main__":
