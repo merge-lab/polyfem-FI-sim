@@ -7,13 +7,19 @@ import pandas as pd
 parser = argparse.ArgumentParser()
 parser.add_argument("--plotter", default="plotly", choices=["plotly", "matplotlib"])
 parser.add_argument("--mode", default="volumes", choices=["volumes", "pressures"])
+parser.add_argument("--csv", default=None, help="Path to CSV file; defaults to latest file in ./logs/")
 args = parser.parse_args()
 
 y_col = {"volumes": "volumes_m3", "pressures": "pressures_atm"}[args.mode]
 
 # --- Data ---
-# df = pd.read_csv("sim_outputs_realistic.csv", index_col=0)
-df = pd.read_csv("./logs/EXP1_sim-outputs_20-04-2026_15:57:17.csv", index_col=0)
+if args.csv is not None:
+    csv_path = args.csv
+else:
+    import glob, os
+    logs = sorted(glob.glob("./logs/*.csv"), key=os.path.getmtime)
+    csv_path = logs[-1]
+df = pd.read_csv(csv_path, index_col=0)
 
 if "volumes_cm3" in df:
     df.rename(columns={"volumes_cm3": "volumes_m3"}, inplace=True)
@@ -86,18 +92,18 @@ else:
     ax1.set_ylabel(y_col)
     ax1.set_title("All pokes: volume over time")
 
-    fig2, axes = plt.subplots(3, 3, sharey="all", figsize=(12, 9))
+    fig2, axes = plt.subplots(3, 3, sharey="all", figsize=(12, 9), layout="constrained")
     fig2.suptitle(f"{y_col} over time by poke index")
     for i_poke, (row, col) in POKE_TO_SUBPLOT.items():
         subset = df[df["i_poke"] == i_poke]
         ax = axes[row, col]
         ax.plot(subset["sim_times_s"], subset[y_col], label=f"i_poke={i_poke}")
-        ax.set_title(f"subplot ({row},{col})")
+        ax.set_title(f"subplot ({row},{col})", fontsize=6)
         ax.legend(fontsize="small")
     for ax in axes.flat:
-        ax.set_xlabel("sim_time_s")
+        ax.set_xlabel("sim_time_s", fontsize=6)
+        ax.set_ylim([1 - 0.0008, 1 + 0.0118])
         ax.set_ylabel(y_col)
         ax.grid(visible=True)
-    fig2.tight_layout()
 
     plt.show()

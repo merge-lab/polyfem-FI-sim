@@ -85,7 +85,7 @@ class SimParams:
 
     ### Material parameters
     # TODO move this to different section to handle multiple materials?
-    material_E = 1.0e6            # Young's modulus [N/m^2]
+    material_E = 1.35e6            # Young's modulus [N/m^2]
     material_nu = 0.45            # Poisson's ratio [unitless]
     material_rho = 1e3          # Density [kg/m^3]
     # Get Lame parameters from Youngs modulus and Poisson's ratio
@@ -95,12 +95,18 @@ class SimParams:
     @property
     def material_k_mu(self):
         return self.material_E / (2 * (1 + self.material_nu))
-    material_k_damp = 1e-4
+    material_k_damp = 1e-3
 
     soft_contact_kd = 1e-7      # Soft contact param #TODO better docs
-    soft_contact_ke = 2e6       # Soft contact param
-    soft_contact_kf = 1         # Soft contact param
-    soft_contact_mu = 1.5       # Soft contact param
+    soft_contact_ke = 1e8       # Soft contact param
+    soft_contact_mu = 2.5       # Soft contact param
+    rigid_contact_k_start = 1.0e6       # For avbd rigid-rigid contacts
+    rigid_avbd_beta = 1.0e8             # For avbd rigid-rigid contacts
+
+    particle_self_contact_radius = 0.0001
+    particle_self_contact_margin = 0.0003
+    # particle_radius = 0.00005 # 0.1mm diameter
+    particle_radius = 0.0005 # 1mm diameter
 
     # Motion parameters
     z_zero = -0.0855
@@ -109,7 +115,8 @@ class SimParams:
     compression_depth = 0.002
     t_start_wait = 0.1
     t_hold = 0.2
-    t_stop_wait = 0.15
+    # t_hold = 1/60
+    t_stop_wait = 0.05
 
 class PokeState(Enum):
     """
@@ -137,8 +144,6 @@ class ThighpadPokeTest:
         self.sim_dt = self.frame_dt / self.sim_substeps # dt of each substep
         self.sim_start_time = 0.0
 
-        self.particle_radius = 0.0002 #0.4mm diameter
-
         self.gravity_zero = wp.zeros(1, dtype=wp.vec3)
         self.gravity_earth = wp.array(wp.vec3(0.0, 0.0, -self.sim_params.g), dtype=wp.vec3)
 
@@ -165,11 +170,11 @@ class ThighpadPokeTest:
             iterations=self.iterations,
             integrate_with_external_rigid_solver=True,
             particle_enable_self_contact=True,
-            particle_self_contact_radius=0.0002,
-            particle_self_contact_margin=0.0004,
+            particle_self_contact_radius=self.sim_params.particle_self_contact_radius,
+            particle_self_contact_margin=self.sim_params.particle_self_contact_margin,
             particle_collision_detection_interval=-1,
-            rigid_contact_k_start=1.0e5,
-            rigid_avbd_beta=1.0e6,
+            rigid_contact_k_start=self.sim_params.rigid_contact_k_start,
+            rigid_avbd_beta=self.sim_params.rigid_avbd_beta,
         )
 
         self.solver_rigid = None
@@ -179,6 +184,8 @@ class ThighpadPokeTest:
             self.t_poke_state_changed = self.sim_time
             if self.args["i_poke"] == -1:
                 self.i_current_poke = 0
+            else:
+                self.i_current_poke = self.args["i_poke"]
 
         # Preallocate variables for trajectory, control, and contacts
         self.state_now = self.model.state()
@@ -210,6 +217,7 @@ class ThighpadPokeTest:
         parser.add_argument("--no-poke", action="store_true", help="Skip loading the poke fixture")
         parser.add_argument("--debug_particles", action="store_true", help="Show debug particles")
         parser.add_argument("--i_poke", default=-1, type=int, help="Which poker to push down. Defaults to (-1), which is 'all'")
+        parser.add_argument("--name", default="", type=str, help="Prefix to filename")
         return vars(parser.parse_args())
 
     def create_model(self, init_qs=None):
@@ -218,7 +226,7 @@ class ThighpadPokeTest:
         """
         # Initialize the scene
         self.scene = newton.ModelBuilder()
-        self.scene.default_particle_radius = self.particle_radius
+        self.scene.default_particle_radius = self.sim_params.particle_radius
 
         ## ======= Add thigh pad =============
         self.create_thighpad(self.scene)
@@ -248,7 +256,6 @@ class ThighpadPokeTest:
         newton.eval_fk(model, model.joint_q, model.joint_qd, model)
 
         model.soft_contact_ke = self.sim_params.soft_contact_ke
-        model.soft_contact_kf = self.sim_params.soft_contact_kf
         model.soft_contact_kd = self.sim_params.soft_contact_kd
         model.soft_contact_mu = self.sim_params.soft_contact_mu
 
@@ -382,7 +389,7 @@ class ThighpadPokeTest:
 
     def setup_debug_viz(self, model):
         # Build per-particle debug color array: blue for fixed, gray for free
-        debug_radius = self.particle_radius
+        debug_radius = self.sim_params.particle_radius
         particle_color_default = [0.6, 0.6, 0.6] # Gray
         particle_color_fixed = [0.0, 0.0, 1.0] # Blue
 
@@ -495,6 +502,10 @@ class ThighpadPokeTest:
         elif self.poke_state == PokeState.STOP:
             if self.sim_time - self.t_poke_state_changed >= self.sim_params.t_stop_wait:
                 # Wait 0.15sec before advancing
+                if self.args["i_poke"] != -1:
+                    self.terminate()
+                    return
+
                 self.i_current_poke += 1 # Advance to next poke
                 if self.i_current_poke >= 9:
                     self.terminate()
@@ -618,7 +629,7 @@ class ThighpadPokeTest:
             "pressures_atm": self.log_pressures,
             "i_poke": self.log_pokes
         })
-        df_out.to_csv(f"./logs/sim-outputs_{now_str}.csv")
+        df_out.to_csv(f"./logs/{self.args['name']}sim-outputs_{now_str}.csv")
         
 
 if __name__ == "__main__":
