@@ -20,8 +20,8 @@
         },
     "materials": {
         "type": "NeoHookean",
-        "E": 1e7,
-        "nu": 0.4,
+        "E": 1.35e6,
+        "nu": 0.45,
         "rho": 1040 
     },
     "solver": {

@@ -1,0 +1,66 @@
+{
+    "common": "ipc-defaults.json",
+    "geometry": [{
+        "mesh": "meshes/ThighpadRemake - Part_fine.msh",
+        "transformation": {
+            "translation": [0, 0, 0]
+        },
+        "volume_selection": 2,
+        "surface_selection": "surface_selection/surface_selections_nine_poke_fine.txt"
+    },{
+        "mesh": "meshes/selectors/ThighpadRemake - selectorPoke1.obj",
+        "is_obstacle": true,
+        "transformation": {
+            "translation": [0, 0.0011, 0]
+        },
+        "surface_selection": 101
+    },{
+        "mesh": "meshes/selectors/ThighpadRemake - selectorPoke2.obj",
+        "is_obstacle": true,
+        "transformation": {
+            "translation": [0, 0.0011, 0]
+        },
+        "surface_selection": 102
+    },{
+        "mesh": "meshes/selectors/ThighpadRemake - selectorPoke3.obj",
+        "is_obstacle": true,
+        "transformation": {
+            "translation": [0, 0.0011, 0]
+        },
+        "surface_selection": 103
+    }],
+    "time": {
+        "integrator": "ImplicitEuler",
+        "tend": 120,
+        "dt": 0.1
+    },
+    "output": {
+        "paraview": {
+            "surface": true,
+            "points": true,
+            "options": {
+                "forces": true
+            },
+            "skip_frame": 2
+        }
+    },
+    "space": {
+        "discr_order": 1
+    },
+    "boundary_conditions": {
+        "dirichlet_boundary": [{
+            "id": 10,
+            "value": [0, 0, 0]
+        }],
+        "obstacle_displacements": [{
+            "id": 101,
+            "value": [0, "if(-abs(t-(13.5+1)/2) + (13.5-1)/2, if(-abs(t-(1+13.5)/2) + 0.5/2, -0.002, if(-(t-(1+13.5)/2), -0.002*2/(13.5-1-0.5)*(t-1), 0.002*2/(13.5-1-0.5)*(t-13.5))), 0)", 0]
+        },{
+            "id": 102,
+            "value": [0, "if(-abs(t-(26.5+14)/2) + (26.5-14)/2, if(-abs(t-(14+26.5)/2) + 0.5/2, -0.002, if(-(t-(14+26.5)/2), -0.002*2/(26.5-14-0.5)*(t-14), 0.002*2/(26.5-14-0.5)*(t-26.5))), 0)", 0]
+        },{                                                                                           
+            "id": 103,                                                                                  
+            "value": [0, "if(-abs(t-(39.5+27)/2) + (39.5-27)/2, if(-abs(t-(27+39.5)/2) + 0.5/2, -0.002, if(-(t-(27+39.5)/2), -0.002*2/(39.5-27-0.5)*(t-27), 0.002*2/(39.5-27-0.5)*(t-39.5))), 0)", 0]
+        }]
+    }
+}
