@@ -100,7 +100,7 @@ class SimParams:
     soft_contact_kd = 1e-7      # Soft contact param #TODO better docs
     soft_contact_ke = 1e8       # Soft contact param
     soft_contact_mu = 2.5       # Soft contact param
-    rigid_contact_k_start = 1.0e6       # For avbd rigid-rigid contacts
+    rigid_contact_k_start = 1.0e5       # For avbd rigid-rigid contacts
     rigid_avbd_beta = 1.0e8             # For avbd rigid-rigid contacts
 
     particle_self_contact_radius = 0.0001
@@ -114,8 +114,8 @@ class SimParams:
     compression_rate = 0.02
     compression_depth = 0.002
     t_start_wait = 0.1
-    t_hold = 0.2
-    # t_hold = 1/60
+    # t_hold = 0.2
+    t_hold = 1/60
     t_stop_wait = 0.05
 
 class PokeState(Enum):
