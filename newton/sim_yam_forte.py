@@ -327,7 +327,8 @@ class YamFORTESim:
 
     
     def create_yam_arm(self, scene):
-        yam_urdf_path = "../Assets/Yam-arm/yam_model_i2rt/yam_st_urdf_with_linear_gripper_gilbert.urdf"
+        # yam_urdf_path = "../Assets/Yam-arm/yam_model_i2rt/yam_gilbert_no_finray.urdf"
+        yam_urdf_path = "../Assets/Yam-arm/yam_model_i2rt/yam_gilbert.urdf"
         scene.add_urdf(
             yam_urdf_path,
             xform=wp.transform((0, 0, 0.0), wp.quat_identity()),
