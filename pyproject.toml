@@ -6,12 +6,15 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "h5py>=3.16.0",
+    "libigl>=2.6.2",
     "matplotlib>=3.10.8",
     "meshio>=5.3.5",
     "newton[examples]",
     "pandas>=2.3.3",
     "plotly>=6.6.0",
+    "pooch>=1.9.0",
     "scipy>=1.15.3",
+    "xarray>=2025.6.1",
 ]
 
 [tool.uv.sources]

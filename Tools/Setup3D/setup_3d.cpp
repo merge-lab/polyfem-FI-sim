@@ -349,51 +349,6 @@ void write_surface_mesh(const int i, const Eigen::MatrixXd &V, const Eigen::Matr
 
 int main(int argc, char **argv)
 {
-    // std::string model_path = "../cantilever_test_beam_cutout.msh";
-    // std::vector<std::string> selection_paths = {
-    //     "../cantilever_test_external_load.STL",
-    //     "../cantilever_test_fixed_bc.STL",
-    //     "../cantilever_test_movable_vertices.STL"};
-    // std::vector<int> bc_surfaces = {0, 1};
-    // std::vector<int> opt_surfaces = {2};
-    // std::vector<int> target_surfaces = {};
-
-    // std::string model_path = "../gripper_03_hirez-clean.msh";
-    // std::vector<std::string> selection_paths = {
-    //     "../gripper_03_fixed_bc.STL",
-    //     "../gripper_03_outer_top.STL",
-    //     "../gripper_03_inner_top.STL",
-    //     "../gripper_03_inner_bottom.STL",
-    //     "../gripper_03_fingerpad.STL"};
-    // std::vector<int> bc_surfaces = {0, 3, 2};
-    // std::vector<int> opt_surfaces = {1};
-    // std::vector<int> target_surfaces = {4};
-
-    // std::string model_path = "../makesense_gripper_main.msh";
-    // std::vector<std::string> selection_paths = {
-    //     "../makesense_gripper_fixed_bc.STL",
-    //     "../makesense_gripper_pressure_bc.STL"};
-    // std::vector<int> bc_surfaces = {0, 1};
-    // std::vector<int> opt_surfaces = {};
-    // std::vector<int> target_surfaces = {};
-
-    // std::string model_path = "../../frog/frog_base_mesh.msh";
-    // std::vector<std::string> selection_paths = {
-    //     "../../frog/frog_fixed_bc.STL",
-    //     "../../frog/frog_pressure_bc.STL"};
-    // std::vector<int> bc_surfaces = {0, 1};
-    // std::vector<int> opt_surfaces = {};
-    // std::vector<int> target_surfaces = {};
-
-    // std::string model_path = "../../finger/finger_base_mesh.msh";
-    // std::vector<std::string> selection_paths = {
-    //     "../../finger/finger_fixed_bc.obj",
-    //     "../../finger/finger_pressure_bc.obj",
-    //     "../../finger/finger_target_selection.obj"};
-    // std::vector<int> bc_surfaces = {0, 1};
-    // std::vector<int> opt_surfaces = {};
-    // std::vector<int> target_surfaces = {2};
-
     CLI::App command_line{"setup_3d"};
 
     command_line.ignore_case();
@@ -453,35 +408,6 @@ int main(int argc, char **argv)
         }
     }
 
-    for (const auto &s : opt_surfaces)
-    {
-        F_groups = {};
-        connected_components_in_selection(V, F, selection_paths[s], F_groups, visited_faces);
-        for (const auto &group : F_groups)
-        {
-            std::cout << "OPT surface has boundary id " << index << std::endl;
-            write_surface_selection(file, group, index);
-
-            write_surface_mesh(index, V, group);
-
-            index++;
-        }
-    }
-
-    for (const auto &s : target_surfaces)
-    {
-        F_groups = {};
-        connected_components_in_selection(V, F, selection_paths[s], F_groups, visited_faces);
-        for (const auto &group : F_groups)
-        {
-            std::cout << "TARGET surface has boundary id " << index << std::endl;
-            write_surface_selection(file, group, index);
-
-            write_surface_mesh(index, V, group);
-
-            index++;
-        }
-    }
 
     return 0;
 }

@@ -282,6 +282,7 @@ class ThighpadPokeTest:
         # Fetching thighpad asset using the USD ecosystem
         # modelpath_thighpad = "../Assets/Thigh-pad/tets_coarse/model.usda"
         modelpath_thighpad = "../Assets/Thigh-pad/tets_fine/model.usda"
+        # modelpath_thighpad = "../Assets/Thigh-pad/mesh_l=0.05_e=2e-3/model.usda"
         # modelpath_thighpad = "../Assets/Thigh-pad/tets_finer/model.usda"
         stage_thighpad = Usd.Stage.Open(modelpath_thighpad)
         prim_thighpad = stage_thighpad.GetPrimAtPath("/root/Model/TetMesh")
@@ -316,6 +317,7 @@ class ThighpadPokeTest:
         col_names = ["id_surf", "v_1", "v_2", "v_3"]
         # df_surf_select = pd.read_csv("../Assets/Thigh-pad/tets_coarse/surface_selections.txt", names=col_names, sep="\s+")
         df_surf_select = pd.read_csv("../Assets/Thigh-pad/tets_fine/surface_selections.txt", names=col_names, sep="\s+")
+        # df_surf_select = pd.read_csv("../Assets/Thigh-pad/mesh_l=0.05_e=2e-3/surface_selections.txt", names=col_names, sep="\s+")
         # df_surf_select = pd.read_csv("../Assets/Thigh-pad/tets_finer/surface_selections.txt", names=col_names, sep="\s+")
         surf_id_bottom = 1
         df_verts_bottom = df_surf_select[df_surf_select["id_surf"] == surf_id_bottom][col_names[1:]]
