@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from enum import Enum
 import time
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import pandas as pd     # Used for mesh pre-processing
@@ -11,6 +12,7 @@ import newton
 import warp as wp
 from pxr import Usd
 
+import newton_builders
 
 @wp.func
 def tri_volume_contribution(
@@ -230,7 +232,19 @@ class ThighpadPokeTest:
         self.scene.default_particle_radius = self.sim_params.particle_radius
 
         ## ======= Add thigh pad =============
-        self.create_thighpad(self.scene)
+        # self.create_thighpad(self.scene)
+        self.pad_start_particle_idx = len(self.scene.particle_q)
+        self._fixed_particle_ids, dict_surf_select = newton_builders.create_thighpad(
+            self.scene,
+            pos         = wp.vec3(0.0, 0.0, 0.0),
+            rot         = wp.quat_identity(),
+            rho         = self.sim_params.material_rho,
+            k_mu        = self.sim_params.material_k_mu,
+            k_lambda    = self.sim_params.material_k_lambda,
+            k_damp      = self.sim_params.material_k_damp,
+        )
+        id_channel = 2
+        self.ids_channel = dict_surf_select[id_channel]
 
         ## ======= Add poke fixture if not disabled =============
         if not self.args["no_poke"]:
@@ -275,70 +289,6 @@ class ThighpadPokeTest:
         print("=== End shape flags ===\n")
 
         return model
-
-    def create_thighpad(self, scene):
-        """
-            Load the thigh pad and place it in the simulation scene
-        """
-        # Fetching thighpad asset using the USD ecosystem
-        # modelpath_thighpad = "../Assets/Thigh-pad/tets_coarse/model.usda"
-        modelpath_thighpad = "../Assets/Thigh-pad/tets_fine/model.usda"
-        # modelpath_thighpad = "../Assets/Thigh-pad/mesh_l=0.05_e=2e-3/model.usda"
-        # modelpath_thighpad = "../Assets/Thigh-pad/tets_finer/model.usda"
-        stage_thighpad = Usd.Stage.Open(modelpath_thighpad)
-        prim_thighpad = stage_thighpad.GetPrimAtPath("/root/Model/TetMesh")
-        tetmesh_thighpad = newton.TetMesh.create_from_usd(prim_thighpad)
-
-        print(f"k_mu: {self.sim_params.material_k_mu}, k_lambda: {self.sim_params.material_k_lambda}")
-
-        quat_initial = wp.quat_from_axis_angle(wp.vec3([1, 0, 0]), np.pi/2)
-        # quat_initial = wp.quat_identity()
-        self.pad_start_particle_idx = len(scene.particle_q)
-        scene.add_soft_mesh(
-            pos         = wp.vec3(0.0, 0.0, 0.000),
-            rot         = quat_initial,
-            scale       = 1.0,
-            vel         = wp.vec3(0.0, 0.0, 0.0),
-            mesh        = tetmesh_thighpad,
-            density     = self.sim_params.material_rho,
-            k_mu        = self.sim_params.material_k_mu,
-            k_lambda    = self.sim_params.material_k_lambda,
-            # k_mu = 1e5,
-            # k_lambda = 1e5,
-            k_damp      = self.sim_params.material_k_damp,
-            tri_ke      = 0.0,
-            tri_ka      = 0.0,
-            tri_kd      = 0.0,
-            tri_drag    = 0.0,
-            tri_lift    = 0.0,
-
-        )
-
-        # Read surface selection csv to find nodes that we want to fix in place
-        col_names = ["id_surf", "v_1", "v_2", "v_3"]
-        # df_surf_select = pd.read_csv("../Assets/Thigh-pad/tets_coarse/surface_selections.txt", names=col_names, sep="\s+")
-        df_surf_select = pd.read_csv("../Assets/Thigh-pad/tets_fine/surface_selections.txt", names=col_names, sep="\s+")
-        # df_surf_select = pd.read_csv("../Assets/Thigh-pad/mesh_l=0.05_e=2e-3/surface_selections.txt", names=col_names, sep="\s+")
-        # df_surf_select = pd.read_csv("../Assets/Thigh-pad/tets_finer/surface_selections.txt", names=col_names, sep="\s+")
-        surf_id_bottom = 1
-        df_verts_bottom = df_surf_select[df_surf_select["id_surf"] == surf_id_bottom][col_names[1:]]
-        np_verts_bottom = df_verts_bottom.to_numpy(dtype=np.int64)
-        ids_verts_bottom = np.unique(np_verts_bottom)
-
-        surf_id_channel = 2
-        self.ids_channel = df_surf_select[df_surf_select["id_surf"] == surf_id_channel][col_names[1:]].to_numpy(dtype=np.int64)
-
-        # Fix bottom surface particles in place — must zero mass AND clear ACTIVE flag,
-        # matching what add_cloth_grid does (builder.py:7156-7160).
-        # The VBD solver has kernels that check each condition independently.
-        self._fixed_particle_ids = [] # TODO - this should probably be a Set
-        for vert_id in ids_verts_bottom:
-            global_id = self.pad_start_particle_idx + vert_id
-            scene.particle_mass[global_id] = 0
-            scene.particle_flags[global_id] = scene.particle_flags[global_id] & ~newton.ParticleFlags.ACTIVE
-            self._fixed_particle_ids.append(global_id) # For debug viz
-
-        breakpoint()
 
     def create_poker(self, scene, init_qs):
         builder_poke_fixture = newton.ModelBuilder()

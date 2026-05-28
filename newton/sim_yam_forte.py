@@ -318,8 +318,10 @@ class YamFORTESim:
         return vars(parser.parse_args())
     
     def create_scene(self):
+        from newton_builders import create_yam_arm
         ## ======== Add yam arm =======
-        self.create_yam_arm(self.scene)
+        # self.create_yam_arm(self.scene)
+        create_yam_arm(self.scene, wp.transform((0.0, 0.0, 0.0), wp.quat_identity()))
 
         self.create_FORTE_fingers(self.scene)
         # self.create_FORTE_loadcell(self.scene)
