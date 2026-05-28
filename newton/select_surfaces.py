@@ -24,8 +24,8 @@ def _parse_args():
         help="'all' or 'any', to determine if counting a triangle " \
         "face as 'included' requires any or all vertices being bounded. Defaults to 'all'."
     )
-    parser.add_argument("--thresh", "-t", type=float, default=0.5, help="Winding number " \
-    "threshold for a point to be considered 'in' a mesh. Defaults to 0.5." \
+    parser.add_argument("--thresh", "-t", type=float, default=0.1, help="Winding number " \
+        "threshold for a point to be considered 'in' a mesh. Defaults to 0.1." \
     )
     parser.add_argument("--out", "-o", type=str, default="surface_selections.txt", help="Output file name")
     args = parser.parse_args()
@@ -43,8 +43,7 @@ def _get_faces_in_selector(tetmesh_verts: np.array, boundary_tris: np.array, sel
     # Compute winding number of all tetmesh vertices w.r.t the selector mesh
     # In theory, winding numbers should be either 0 (not within mesh) or 1 (within mesh). In practice they are floats due to inverse trig errors
     wind_nums = igl.fast_winding_number(selector_mesh.vertices, selector_mesh.faces, tetmesh_verts)
-    threshold = 0.5
-    i_verts_in = np.nonzero(wind_nums > threshold)[0]
+    i_verts_in = np.nonzero(wind_nums > args.thresh)[0]
     face_verts_in_selection = np.isin(boundary_tris, i_verts_in) # Elementwise checks if face vert indices are in the set of bounded verts
 
     if args.incl == "any":

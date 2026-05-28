@@ -84,9 +84,12 @@ class SimParams:
 
     ### Material parameters
     # TODO move this to different section to handle multiple materials?
-    material_E = 1.35e6            # Young's modulus [N/m^2]
+    # material_E = 1.35e6            # Young's modulus [N/m^2]
+    material_E = 1.35e9            # Young's modulus [N/m^2]
+    # material_nu = 0.45            # Poisson's ratio [unitless]
     material_nu = 0.45            # Poisson's ratio [unitless]
-    material_rho = 1e3          # Density [kg/m^3]
+    # material_rho = 1e3          # Density [kg/m^3]
+    material_rho = 65 / 65754 * 1000**3 / 1000# 65g / 65754mm^3, converted from g/mm3 to kg/m3, = 988.533 kg/m3
     # Get Lame parameters from Youngs modulus and Poisson's ratio
     @property
     def material_k_lambda(self):
@@ -94,7 +97,7 @@ class SimParams:
     @property
     def material_k_mu(self):
         return self.material_E / (2 * (1 + self.material_nu))
-    material_k_damp = 1e-3
+    material_k_damp = 1e-4
 
     soft_contact_kd = 1e-7      # Soft contact param #TODO better docs
     soft_contact_ke = 1e8       # Soft contact param
@@ -102,10 +105,10 @@ class SimParams:
     rigid_contact_k_start = 1.0e5       # For avbd rigid-rigid contacts
     rigid_avbd_beta = 1.0e8             # For avbd rigid-rigid contacts
 
-    particle_self_contact_radius = 0.0001
-    particle_self_contact_margin = 0.0003
+    particle_self_contact_radius = 0.00005
+    particle_self_contact_margin = 0.00015
     # particle_radius = 0.00005 # 0.1mm diameter
-    particle_radius = 0.0005 # 1mm diameter
+    particle_radius = 0.0002 # 1mm diameter
 
     # Motion parameters
     z_zero = -0.0855
@@ -128,7 +131,7 @@ class YamFORTESim:
         self.frame_dt = 1.0/self.fps                    # dt of each macro-step
         self.sim_steps = self.fps                             # # of macrosteps in sim
         self.sim_substeps = 10                          # # of substeps per macrostep
-        self.iterations = 5 
+        self.iterations = 150
         self.sim_dt = self.frame_dt / self.sim_substeps # dt of each substep
         self.sim_start_time = 0.0
 
@@ -155,6 +158,8 @@ class YamFORTESim:
             iterations=self.iterations,
             integrate_with_external_rigid_solver=True,
             particle_enable_self_contact=True,
+            particle_enable_tile_solve=False,
+            # particle_enable_tile_solve=True,
             particle_self_contact_radius=self.sim_params.particle_self_contact_radius,
             particle_self_contact_margin=self.sim_params.particle_self_contact_margin,
             particle_collision_detection_interval=-1,
@@ -316,6 +321,7 @@ class YamFORTESim:
         ## ======== Add yam arm =======
         self.create_yam_arm(self.scene)
 
+        self.create_FORTE_fingers(self.scene)
         # self.create_FORTE_loadcell(self.scene)
 
         # TODO - add breadboard
@@ -323,7 +329,7 @@ class YamFORTESim:
         ## ======== Add ground plane =======
         self.scene.add_ground_plane()
 
-        self.create_thighpad(self.scene)
+        # self.create_thighpad(self.scene)
 
     
     def create_yam_arm(self, scene):
@@ -339,8 +345,89 @@ class YamFORTESim:
             force_show_colliders=False,
         )
 
+    def _load_surf_selection(self, file_surf_select):
+        col_names = ["id_surf", "v_1", "v_2", "v_3"]
+        df_surf_select = pd.read_csv(file_surf_select, names=col_names, sep="\s+")
+
+        map_surf_select: map[int, np.array] = {}
+        for surf_id_i in np.unique(df_surf_select["id_surf"]):
+            surf_selections_i = df_surf_select[df_surf_select["id_surf"] == surf_id_i]
+            map_surf_select[surf_id_i] = surf_selections_i[col_names[1:]].to_numpy(dtype=np.int64) # Drop the id_surf column, pick out unique vertex ids, and convert to np int array.
+        
+        return map_surf_select
+
     def create_FORTE_fingers(self, scene):
-        pass
+        assetdir = "../Assets/BasicFinger/mesh_l=0.05_e=2e-3/"
+        # assetdir = "../Assets/FORTE/mesh_l=0.05_e=1e-2/"
+        # assetdir = "../Assets/FORTE/mesh_l=0.05_e=2e-3/"
+        # assetdir = "../Assets/FORTE/mesh_l=0.05/"
+        modelpath_FORTE = assetdir + "model.usda"
+        stage_FORTE = Usd.Stage.Open(modelpath_FORTE)
+        prim_FORTE = stage_FORTE.GetPrimAtPath("/root/Model/TetMesh")
+        tetmesh_FORTE = newton.TetMesh.create_from_usd(prim_FORTE)
+
+        # Load surface selection as a map: surf_id -> vertex ids
+        file_surf_select = assetdir + "surface_selections.txt"
+        self.map_selected_surfs = self._load_surf_selection(file_surf_select)
+
+        # quat_l_finger = wp.quat_from_axis_angle(wp.vec3([1, 0, 0]), 0.)
+        r_fingercntr_finger = wp.vec3(0.016, 0, 0)
+        quat_l_finger = wp.quat_from_euler(wp.vec3(np.pi, 0, -np.pi/2), 0, 1, 2)
+        posn_l_finger = wp.vec3(0.203, -0.004, 0.17) # Btwn screw hole posn should be like <0.21, -0.02, 0.18> # TODO - where is origin of finger mesh?
+        self.l_finger_start_idx = len(scene.particle_q)
+        scene.add_soft_mesh(
+            pos         = posn_l_finger,
+            rot         = quat_l_finger,
+            scale       = 1.0,
+            vel         = wp.vec3(0.0, 0.0, 0.0),
+            mesh        = tetmesh_FORTE,
+            density     = self.sim_params.material_rho,
+            k_mu        = self.sim_params.material_k_mu,
+            k_lambda    = self.sim_params.material_k_lambda,
+            # k_mu = 1e5,
+            # k_lambda = 1e5,
+            k_damp      = self.sim_params.material_k_damp,
+            tri_ke      = 0.0,
+            tri_ka      = 0.0,
+            tri_kd      = 0.0,
+            tri_drag    = 0.0,
+            tri_lift    = 0.0,
+        )
+
+        quat_r_finger = wp.quat_from_axis_angle(wp.vec3([0, 0, 1]), wp.PI/2)
+        posn_r_finger = wp.vec3(0.203, 0.004, 0.17) # Inter-screw-hole posn should be like <0.21, 0.02, 0.18
+        self.r_finger_start_idx = len(scene.particle_q)
+        scene.add_soft_mesh(
+            pos         = posn_r_finger,
+            rot         = quat_r_finger,
+            scale       = 1.0,
+            vel         = wp.vec3(0.0, 0.0, 0.0),
+            mesh        = tetmesh_FORTE,
+            density     = self.sim_params.material_rho,
+            k_mu        = self.sim_params.material_k_mu,
+            k_lambda    = self.sim_params.material_k_lambda,
+            # k_mu = 1e5,
+            # k_lambda = 1e5,
+            k_damp      = self.sim_params.material_k_damp,
+            tri_ke      = 0.0,
+            tri_ka      = 0.0,
+            tri_kd      = 0.0,
+            tri_drag    = 0.0,
+            tri_lift    = 0.0,
+        )
+
+        id_fixed = 6
+        vert_ids_fix = np.unique(self.map_selected_surfs[id_fixed])
+        self._fixed_particle_ids = []
+        for vert_id in vert_ids_fix:
+            global_id_l = self.l_finger_start_idx + vert_id
+            global_id_r = self.r_finger_start_idx + vert_id
+            
+            for global_id in (global_id_l, global_id_r):
+                scene.particle_mass[global_id] = 0
+                scene.particle_flags[global_id] = scene.particle_flags[global_id] & ~newton.ParticleFlags.ACTIVE
+                self._fixed_particle_ids.append(global_id) # For debug viz
+
 
     def create_FORTE_loadcell(self, scene):
         pass

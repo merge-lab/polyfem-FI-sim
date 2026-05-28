@@ -1,0 +1,4 @@
+tetMesh: basic_finger_channelless.msh
+selections:
+  - mesh: "../selectors/selector_dirichlet.obj"
+    surface_id: 6

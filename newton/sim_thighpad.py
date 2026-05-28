@@ -170,6 +170,7 @@ class ThighpadPokeTest:
             iterations=self.iterations,
             integrate_with_external_rigid_solver=True,
             particle_enable_self_contact=True,
+            # particle_enable_tile_solve=True,
             particle_self_contact_radius=self.sim_params.particle_self_contact_radius,
             particle_self_contact_margin=self.sim_params.particle_self_contact_margin,
             particle_collision_detection_interval=-1,
@@ -336,6 +337,8 @@ class ThighpadPokeTest:
             scene.particle_mass[global_id] = 0
             scene.particle_flags[global_id] = scene.particle_flags[global_id] & ~newton.ParticleFlags.ACTIVE
             self._fixed_particle_ids.append(global_id) # For debug viz
+
+        breakpoint()
 
     def create_poker(self, scene, init_qs):
         builder_poke_fixture = newton.ModelBuilder()
