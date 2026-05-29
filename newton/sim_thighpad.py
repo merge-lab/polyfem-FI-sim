@@ -13,104 +13,10 @@ import warp as wp
 from pxr import Usd
 
 import newton_builders
-
-@wp.func
-def tri_volume_contribution(
-    v0: wp.vec3,
-    v1: wp.vec3,
-    v2: wp.vec3,
-):
-    # Compute the signed volume of the tetrahedron with the 3 points + origin
-    vol = wp.dot(v0, wp.cross(v1, v2)) / 6.0  # tetra volume (0,v0,v1,v2)
-    return vol
-
-@wp.kernel
-def compute_solid_mesh_volume(
-    indices: wp.array[int],
-    vertices: wp.array[wp.vec3],
-    # outputs
-    volume: wp.array[float],
-):
-    i = wp.tid()
-    p = vertices[indices[i * 3 + 0]]
-    q = vertices[indices[i * 3 + 1]]
-    r = vertices[indices[i * 3 + 2]]
-
-    # Sum together the signed volumes of all tetrahedra created by each tri-face with origin
-    # The final volume will be the actual volume of the mesh
-    v = tri_volume_contribution(p, q, r)
-    wp.atomic_add(volume, 0, v)
-
-def compute_volume_mesh(
-    vertices: wp.array,
-    indices: wp.array,
-) -> float:
-    """
-    Compute the mass, center of mass, inertia, and volume of a triangular mesh.
-
-    Args:
-        vertices: A wp.array of vertex positions (3D coordinates).
-        indices: A wp.array of triangle indices (each triangle is defined by 3 vertex indices).
-
-    Returns:
-        A tuple containing:
-            - volume: The signed volume of the mesh.
-    """
-
-    indices = np.array(indices).flatten()
-    num_tris = len(indices) // 3
-    vol_warp = wp.zeros(1, dtype=float) # Preallocate output
-
-    wp_vertices = wp.array(vertices, dtype=wp.vec3)
-    wp_indices = wp.array(indices, dtype=int)
-
-    wp.launch(
-        kernel=compute_solid_mesh_volume,
-        dim=num_tris,
-        inputs=[
-            wp_indices,
-            wp_vertices,
-        ],
-        outputs=[
-            vol_warp,
-        ],
-    )
-    V_tot = float(vol_warp.numpy()[0])  # signed volume
-
-    # If the winding is inward, flip signs
-    if V_tot < 0: V_tot = -V_tot
-    return V_tot
-
+import utils_FI
 @dataclass
-class SimParams:
-    g = 9.81
-
-    ### Material parameters
-    # TODO move this to different section to handle multiple materials?
-    material_E = 1.35e6            # Young's modulus [N/m^2]
-    material_nu = 0.45            # Poisson's ratio [unitless]
-    material_rho = 1e3          # Density [kg/m^3]
-    # Get Lame parameters from Youngs modulus and Poisson's ratio
-    @property
-    def material_k_lambda(self):
-        return self.material_E * self.material_nu / ((1 + self.material_nu) * (1 - 2 * self.material_nu))
-    @property
-    def material_k_mu(self):
-        return self.material_E / (2 * (1 + self.material_nu))
-    material_k_damp = 1e-3
-
-    soft_contact_kd = 1e-7      # Soft contact param #TODO better docs
-    soft_contact_ke = 1e8       # Soft contact param
-    soft_contact_mu = 2.5       # Soft contact param
-    rigid_contact_k_start = 1.0e5       # For avbd rigid-rigid contacts
-    rigid_avbd_beta = 1.0e8             # For avbd rigid-rigid contacts
-
-    particle_self_contact_radius = 0.0001
-    particle_self_contact_margin = 0.0003
-    # particle_radius = 0.00005 # 0.1mm diameter
-    particle_radius = 0.0005 # 1mm diameter
-
-    # Motion parameters
+class PokeParams:
+    ### Motion parameters
     z_zero = -0.0855
     # compression_rate = 0.02/60
     compression_rate = 0.02
@@ -134,16 +40,12 @@ class PokeState(Enum):
 class ThighpadPokeTest:
     def __init__(self, viewer, verbose=False):
         self.sim_time = 0.0
-        self.sim_params = SimParams()
+        self.sim_params = newton_builders.SimParams()
+        self.poke_params = PokeParams()
 
         # Setup simulation parameters
         # TODO move these to sim params as well?
-        self.fps = 60
-        self.frame_dt = 1.0/self.fps                    # dt of each macro-step
-        self.sim_steps = self.fps                             # # of macrosteps in sim
-        self.sim_substeps = 10                          # # of substeps per macrostep
-        self.iterations = 5 
-        self.sim_dt = self.frame_dt / self.sim_substeps # dt of each substep
+        fps = self.sim_params.fps
         self.sim_start_time = 0.0
 
         self.gravity_zero = wp.zeros(1, dtype=wp.vec3)
@@ -169,7 +71,7 @@ class ThighpadPokeTest:
         # Initialize both solvers
         self.solver_vbd = newton.solvers.SolverVBD(
             model=self.model,
-            iterations=self.iterations,
+            iterations=self.sim_params.iterations,
             integrate_with_external_rigid_solver=True,
             particle_enable_self_contact=True,
             # particle_enable_tile_solve=True,
@@ -304,43 +206,6 @@ class ThighpadPokeTest:
         builder_poke_fixture.joint_q = init_qs.list()
         scene.add_world(builder_poke_fixture)
 
-    def create_poker_primitives(self, scene, init_z):
-        # NOTE - UNUSED. Leaving here for reference in case we want to use it someday.
-        X_SPACING = 0.025117
-        Y_SPACING = 0.025117
-        R_POKER = 0.007/2
-        HALF_H_POKER = 0.01
-        x_posns = X_SPACING * np.array([-1, 0, 1])
-        y_posns = Y_SPACING * np.array([-1, 0, 1])
-        Xs, Ys = np.meshgrid(x_posns, y_posns)
-        self.poker_links = []
-        self.poker_joints = []
-        i_poker = 0
-        for i in range(3):
-            for j in range(3):
-                name_ij = f"Poker_{i_poker}"
-                posn_ij = wp.vec3([Xs[i, j], Ys[i, j], init_z])
-                # poker_ij_body = scene.add_body(
-                #     xform=wp.transform(p=posn_ij, q=wp.quat_identity()),
-                #     label=f"Poker_{i_poker}",
-                #     is_kinematic=True
-                # )
-                xform_ij = wp.transform(p=posn_ij, q=wp.quat_identity())
-                poker_ij_link = scene.add_link(xform=xform_ij, mass=15.0, is_kinematic=True, label=name_ij)
-                scene.add_shape_cylinder(poker_ij_link, radius=R_POKER, half_height=HALF_H_POKER)
-                joint_ij = scene.add_joint_prismatic(
-                    parent=-1,
-                    child=poker_ij_link,
-                    axis=newton.Axis.Z,
-                    parent_xform=xform_ij,
-                    label=name_ij+"_joint"
-                )
-                scene.add_articulation([joint_ij], label=name_ij+"_art")
-
-                self.poker_links.append(poker_ij_link)
-                self.poker_joints.append(joint_ij)
-                
-                i_poker += 0
 
     def setup_debug_viz(self, model):
         # Build per-particle debug color array: blue for fixed, gray for free
@@ -375,7 +240,7 @@ class ThighpadPokeTest:
         """
 
         self.solver_vbd.rebuild_bvh(self.state_now)
-        for i in range(self.sim_substeps):
+        for i in range(self.sim_params.sim_substeps):
             # Old - bill
             # # Reset forces on the current state
             self.state_now.clear_forces()
@@ -390,7 +255,7 @@ class ThighpadPokeTest:
                 self.model.shape_contact_pair_count = 0
 
                 # # self.state_now.joint_qd.assign(self.target_joint_qd) # TODO - move joints
-                self.solver_rigid.step(self.state_now, self.state_next, self.control, None, self.sim_dt)
+                self.solver_rigid.step(self.state_now, self.state_next, self.control, None, self.sim_params.sim_dt)
 
                 self.state_now.particle_f.zero_()
                 self.model.particle_count = particle_count
@@ -398,7 +263,7 @@ class ThighpadPokeTest:
 
             # # TODO - look into what collision pipelines do
             self.model.collide(self.state_now, self.contacts)
-            self.solver_vbd.step(self.state_now, self.state_next, self.control, self.contacts, self.sim_dt)
+            self.solver_vbd.step(self.state_now, self.state_next, self.control, self.contacts, self.sim_params.sim_dt)
 
             # # Swap the states (update state_now to be state_next)
             # # We can swap because state_next can really be anything
@@ -406,7 +271,7 @@ class ThighpadPokeTest:
             self.state_now, self.state_next = self.state_next, self.state_now
 
             # print(f"State now: {self.state_now.__dict__}")
-            self.sim_time += self.sim_dt
+            self.sim_time += self.sim_params.sim_dt
 
 
     def step(self):
@@ -415,7 +280,7 @@ class ThighpadPokeTest:
 
         if self.graph:
             wp.capture_launch(self.graph)
-            self.sim_time += self.sim_dt
+            self.sim_time += self.sim_params.sim_dt
         else:
             self.simulate()
         
@@ -425,21 +290,21 @@ class ThighpadPokeTest:
     def _control_poker(self):
 
         if self.poke_state == PokeState.DOWN:
-            if self.sim_time < self.sim_params.t_start_wait:
+            if self.sim_time < self.poke_params.t_start_wait:
                 # Hold for a bit at the start to let signal stabilize
                 joint_vel = 0.0
             else:
-                if self.current_q <= self.sim_params.z_zero - self.sim_params.compression_depth:
+                if self.current_q <= self.poke_params.z_zero - self.poke_params.compression_depth:
                     # If reached bottom out distance, switch to the 0.5sec hold
                     self.poke_state = PokeState.BOTTOM
                     joint_vel = 0.0
                     self.t_poke_state_changed = self.sim_time # Track last state change time
                 else:
                     # Compression rate in Gilbert test: 20mm / min
-                    joint_vel = -self.sim_params.compression_rate
+                    joint_vel = -self.poke_params.compression_rate
 
         elif self.poke_state == PokeState.BOTTOM:
-            if self.sim_time - self.t_poke_state_changed >= self.sim_params.t_hold:
+            if self.sim_time - self.t_poke_state_changed >= self.poke_params.t_hold:
                 # Transition poke state if we have waited for long enough
                 self.poke_state = PokeState.UP
                 self.t_poke_state_changed = self.sim_time # Track last state change time
@@ -452,10 +317,10 @@ class ThighpadPokeTest:
                 joint_vel = 0.0
                 self.t_poke_state_changed = self.sim_time # Track last state change time
             else:
-                joint_vel = self.sim_params.compression_rate
+                joint_vel = self.poke_params.compression_rate
 
         elif self.poke_state == PokeState.STOP:
-            if self.sim_time - self.t_poke_state_changed >= self.sim_params.t_stop_wait:
+            if self.sim_time - self.t_poke_state_changed >= self.poke_params.t_stop_wait:
                 # Wait 0.15sec before advancing
                 if self.args["i_poke"] != -1:
                     self.terminate()
@@ -474,7 +339,7 @@ class ThighpadPokeTest:
         else:
             raise ValueError("Invalid poke state flag value")
 
-        controller_hz = self.frame_dt/self.sim_substeps
+        controller_hz = self.sim_params.frame_dt/self.sim_params.sim_substeps
         dq = joint_vel * controller_hz
         self.current_q += dq
 
@@ -528,11 +393,11 @@ class ThighpadPokeTest:
         tube_vol = (wp.PI * (tube_diameter/2)**2) * tube_length
 
         # Log the channel volume
-        if self.sim_time >= self.sim_params.t_start_wait:
+        if self.sim_time >= self.poke_params.t_start_wait:
             # Get channel volume
             idxs = self.pad_start_particle_idx + self.ids_channel
             verts = self.state_now.particle_q[self.pad_start_particle_idx:]
-            channel_volume = compute_volume_mesh(verts, idxs)
+            channel_volume = utils_FI.compute_volume_mesh(verts, idxs)
             self.log_volumes.append(channel_volume)
 
             if self.vol_initial == -1:
@@ -589,11 +454,6 @@ class ThighpadPokeTest:
 
 if __name__ == "__main__":
     viewer = newton.viewer.ViewerGL(headless=False)
-    # Default camera pose: 
-    #  - pos: [10.0, 0.0, 2.0]
-    #  - pitch: 0.0
-    #  - yaw: -180
-
     verbose = False
     thighpad_poke_test = ThighpadPokeTest(viewer, False)
     thighpad_poke_test.run()

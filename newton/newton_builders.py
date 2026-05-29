@@ -1,4 +1,5 @@
 from pathlib import Path
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd     # Used for mesh pre-processing
@@ -6,6 +7,54 @@ import pandas as pd     # Used for mesh pre-processing
 import newton
 import warp as wp
 from pxr import Usd
+
+@dataclass
+class SimParams:
+
+    ### Solver parameters
+    # Time resolution and solver iterations
+    fps = 60
+    sim_substeps = 10
+    iterations = 5
+    @property
+    def frame_dt(self):
+        return 1/self.fps
+    @property
+    def sim_dt(self):
+        return self.frame_dt / self.sim_substeps
+
+    # Solver particle contact radii
+    particle_self_contact_radius = 0.0001
+    particle_self_contact_margin = 0.0003
+    # particle_radius = 0.00005 # 0.1mm diameter
+    particle_radius = 0.0005 # 1mm diameter
+
+    # SOlver contact behavior parameters
+    soft_contact_kd = 1e-7      # Soft contact param #TODO better docs
+    soft_contact_ke = 1e8       # Soft contact param
+    soft_contact_mu = 2.5       # Soft contact param
+    rigid_contact_k_start = 1.0e5       # For avbd rigid-rigid contacts
+    rigid_avbd_beta = 1.0e8             # For avbd rigid-rigid contacts
+
+    ### World parameters
+    g = 9.81
+
+
+    ### Material parameters
+    # TODO move this to different section to handle multiple materials?
+    material_E = 1.35e6            # Young's modulus [N/m^2]
+    material_nu = 0.45            # Poisson's ratio [unitless]
+    material_rho = 1e3          # Density [kg/m^3]
+    # Get Lame parameters from Youngs modulus and Poisson's ratio
+    @property
+    def material_k_lambda(self):
+        return self.material_E * self.material_nu / ((1 + self.material_nu) * (1 - 2 * self.material_nu))
+    @property
+    def material_k_mu(self):
+        return self.material_E / (2 * (1 + self.material_nu))
+    material_k_damp = 1e-3
+
+
 
 def create_yam_arm(scene: newton.ModelBuilder, xform: wp.transform):
     yam_urdf_path = "../Assets/Yam-arm/yam_model_i2rt/yam_gilbert_no_finray.urdf"
