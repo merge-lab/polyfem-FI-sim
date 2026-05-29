@@ -213,16 +213,31 @@ class ThighpadPokeTest:
         asset_path = newton.utils.download_asset("franka_emika_panda")
 
         scene.add_urdf(
-            str(asset_path / "urdf" / "fr3_franka_hand.urdf"),
+            str(asset_path / "urdf" / "fr3.urdf"),
             xform=wp.transform((-0.5, -0.5, -0.1), wp.quat_identity()),
             floating=False,
             scale=1.0,  # URDF is in meters
             enable_self_collisions=False,
-            collapse_fixed_joints=True,
-            # collapse_fixed_joints=False,
+            # collapse_fixed_joints=True,
+            collapse_fixed_joints=False,
             force_show_colliders=False,
         )
         scene.joint_q[:6] = [0.0, 0.0, 0.0, -1.59695, 0.0, 2.5307]
+
+        def find_body(name):
+            return next(i for i, lbl in enumerate(scene.body_label) if lbl.endswith(f"/{name}"))
+
+        breakpoint()
+        robot_tip_idx = find_body("fr3_link8")
+        indentor_path = "../Assets/Franka_indentors/Indentor_round_d=30mm.stl"
+        indentor_mesh = newton.Mesh.create_from_file(indentor_path)
+
+        indentor_xform = wp.transform(
+            # wp.vec3(0.0, 0.0, 0.21), # I thought the z offset should be 0.1, not sure why it's different
+            wp.vec3(0.0, 0.0, 0.1), # I thought the z offset should be 0.1, not sure why it's different
+            wp.quat_identity()
+        )
+        scene.add_shape_mesh(body=robot_tip_idx, mesh=indentor_mesh, xform=indentor_xform)
 
     def set_franka_targets(self):
         gripper_open = 1.0
