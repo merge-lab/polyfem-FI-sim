@@ -77,8 +77,8 @@ class ThighpadPokeTest:
         # Initialize camera
         self.viewer = viewer
         self.viewer.set_model(self.model)
-        self.viewer.set_camera(wp.vec3([-0.6, 0.6, 1.24]), -42, -58)
-        self.viewer._cam_speed = 0.1
+        self.viewer.set_camera(wp.vec3([0.15, -0.15, 0.1]), -3.7, -118.0)
+        self.viewer._cam_speed = 0.15
 
         ### Initialize both solvers
         self.solver_vbd = newton.solvers.SolverVBD(
@@ -152,7 +152,7 @@ class ThighpadPokeTest:
         self.pad_start_particle_idx = len(self.scene.particle_q)
         self._fixed_particle_ids, dict_surf_select = newton_builders.create_thighpad(
             self.scene,
-            pos         = wp.vec3(-0.16, -0.44, 0.0),
+            pos         = wp.vec3(0.0, -0.5, 0.0),
             rot         = wp.quat_identity(),
             rho         = self.sim_params.material_rho,
             k_mu        = self.sim_params.material_k_mu,
@@ -210,10 +210,10 @@ class ThighpadPokeTest:
         return model
 
     def add_articulated_franka(self, scene):
-        asset_path = newton.utils.download_asset("franka_emika_panda")
+        asset_path = Path("../Assets/franka_emika_panda/urdf/fr3_large_sphere.urdf")
 
         scene.add_urdf(
-            str(asset_path / "urdf" / "fr3.urdf"),
+            asset_path,
             xform=wp.transform((-0.5, -0.5, -0.1), wp.quat_identity()),
             floating=False,
             scale=1.0,  # URDF is in meters
@@ -224,21 +224,6 @@ class ThighpadPokeTest:
         )
         scene.joint_q[:6] = [0.0, 0.0, 0.0, -1.59695, 0.0, 2.5307]
 
-        def find_body(name):
-            return next(i for i, lbl in enumerate(scene.body_label) if lbl.endswith(f"/{name}"))
-
-        breakpoint()
-        robot_tip_idx = find_body("fr3_link8")
-        indentor_path = "../Assets/Franka_indentors/Indentor_round_d=30mm.stl"
-        indentor_mesh = newton.Mesh.create_from_file(indentor_path)
-
-        indentor_xform = wp.transform(
-            # wp.vec3(0.0, 0.0, 0.21), # I thought the z offset should be 0.1, not sure why it's different
-            wp.vec3(0.0, 0.0, 0.1), # I thought the z offset should be 0.1, not sure why it's different
-            wp.quat_identity()
-        )
-        scene.add_shape_mesh(body=robot_tip_idx, mesh=indentor_mesh, xform=indentor_xform)
-
     def set_franka_targets(self):
         gripper_open = 1.0
         gripper_close = 0.5
@@ -247,22 +232,16 @@ class ThighpadPokeTest:
         # [duration, px, py, pz, qx, qy, qz, qw, gripper_activation] (positions in meters)
         self.robot_key_poses = np.array(
             [
-                # approach: move above the duck
-                [2.5, -0.005, -0.5, 0.35, 1, 0.0, 0.0, 0.0, gripper_open],
-                # descend: lower to duck body
-                [2.0, -0.005, -0.5, 0.21, 1, 0.0, 0.0, 0.0, gripper_open],
-                # pinch: close gripper on duck
-                [2.5, -0.005, -0.5, 0.21, 1, 0.0, 0.0, 0.0, gripper_close],
-                # lift: raise duck off table
-                [2.0, -0.005, -0.5, 0.35, 1, 0.0, 0.0, 0.0, gripper_close],
-                # hold: pause in air
-                [2.0, -0.005, -0.5, 0.35, 1, 0.0, 0.0, 0.0, gripper_close],
-                # place: lower back to table
-                [2.0, -0.005, -0.5, 0.21, 1, 0.0, 0.0, 0.0, gripper_close],
-                # release: open gripper
-                [1.0, -0.005, -0.5, 0.21, 1, 0.0, 0.0, 0.0, gripper_open],
-                # retract: move away
-                [2.0, -0.005, -0.5, 0.35, 1, 0.0, 0.0, 0.0, gripper_open],
+                # Initial pose
+                [1.0, -0.005, -0.5, 0.1, 1, 0.0, 0.0, 0.0],
+                # Descend to right abovbe pad
+                [1.0, -0.005, -0.5, 0.02, 1, 0.0, 0.0, 0.0],
+                # Press
+                [4.0, -0.005, -0.5, 0.01, 1, 0.0, 0.0, 0.0],
+                # Lift back to just above pad
+                [4.0, -0.005, -0.5, 0.02, 1, 0.0, 0.0, 0.0],
+                # Return to original configuration and end
+                [2.0, -0.005, -0.5, 0.35, 1, 0.0, 0.0, 0.0],
             ],
             dtype=np.float32,
         )
@@ -292,14 +271,9 @@ class ThighpadPokeTest:
         self.n_dofs = self.model.joint_dof_count
         self.ik_joint_q =  wp.array(self.model.joint_q, shape=(1, self.n_coords))
         
-        self.ee_idx = self.scene.body_count - 3        
-        self.finger_idx0 = self.n_coords - 2
-        self.finger_idx1 = self.n_coords - 1
-
+        self.ee_idx = self.scene.body_count - 1
         # Allocate buffers for values (need to be wp.arrays for graph capture)
-        self.finger_pos_buf = wp.zeros(1, dtype=float)              # Buffer to store finger position target
         self.target_joint_q = wp.zeros(self.n_coords, dtype=float) # Buffer to store ik result (joint q targets)
-        # self.target_joint_qd = wp.zeros(self.n_coords, dtype=float) # Buffer to store ik result (joint qd targets)
         self.target_joint_qd = wp.empty_like(self.state_now.joint_qd)
 
         init_target_pos = wp.vec3(*self.targets[0][:3].tolist())
@@ -308,7 +282,7 @@ class ThighpadPokeTest:
         # Position objective
         self.pos_obj = ik.IKObjectivePosition(
             link_index=self.ee_idx,
-            link_offset=wp.vec3(0.0, 0.0, 0.22),
+            link_offset=wp.vec3(0.0, 0.0, 0.0),
             target_positions=wp.array([init_target_pos], dtype=wp.vec3),
         )
 
@@ -327,8 +301,6 @@ class ThighpadPokeTest:
         )
 
         # Variables the solver will update
-        # self.joint_q = self.model.joint_q.reshape((1, self.model.joint_coord_count))
-
         self.ik_solver = ik.IKSolver(
             model=self.model,
             n_problems=1,
@@ -351,33 +323,17 @@ class ThighpadPokeTest:
         t_end = self.robot_key_poses_time[current_interval]
         alpha = float(np.clip((self.sim_time - t_start) / (t_end - t_start), 0.0, 1.0))
 
-        target_cur = self.targets[current_interval]
-        target_prev = self.targets[current_interval - 1] if current_interval > 0 else target_cur
-        target_interp = (1.0 - alpha) * target_prev + alpha * target_cur
+        self.target_cur = self.targets[current_interval]
+        target_prev = self.targets[current_interval - 1] if current_interval > 0 else self.target_cur
+        target_interp = (1.0 - alpha) * target_prev + alpha * self.target_cur
 
         # Update IK target arrays on GPU (read by IK solver inside captured graph)
         self.pos_obj.set_target_position(0, wp.vec3(*target_interp[:3].tolist()))
         self.rot_obj.set_target_rotation(0, wp.vec4(*target_interp[3:7].tolist()))
 
-        # Update gripper finger position buffer
-        finger_pos = float(target_interp[-1]) * 0.04
-        self.finger_pos_buf.fill_(finger_pos)
-        print("============= Control step =============")
-        print(f"Current interval: {current_interval}")
-        print(f"Current franka target: {target_interp}")
-        # print(f"Current target joint q: {self.target_joint_q}")
-        # print(f"Current target joint qd: {self.target_joint_qd}")
-
-    def franka_control(self):
+    def franka_solve_joint_qd(self):
         # IK solve once per frame (GPU, captured in graph)
         self.ik_solver.step(self.ik_joint_q, self.ik_joint_q, iterations=self.ik_iters)
-
-        # Set gripper finger positions from buffer
-        wp.launch(
-            set_gripper_q,
-            dim=1,
-            inputs=[self.ik_joint_q, self.finger_pos_buf, self.finger_idx0, self.finger_idx1],
-        )
 
         # Copy IK result to target buffer (2D -> 1D, contiguous memory)
         wp.copy(self.target_joint_q, self.ik_joint_q, dest_offset=0, src_offset=0, count=self.n_coords)
@@ -389,9 +345,6 @@ class ThighpadPokeTest:
             inputs=[self.target_joint_q, self.state_now.joint_q, self.target_joint_qd, 1.0 / self.sim_params.frame_dt],
         )
 
-        # self.target_joint_qd[0:7] = 0.1 * wp.ones(7)
-        # self.target_joint_qd = wp.array([0.0002, 0.0002, 0.0002, 0.02, 0.02, 0.02, 0.02, 0.05, 0.05], dtype=float)
-        # self.target_joint_qd = 0.0005 * np.ones(self.n_coords, dtype=float)
     # ----------------------------------------------------------------------
     # Helpers
     # ----------------------------------------------------------------------
@@ -482,7 +435,7 @@ class ThighpadPokeTest:
             Not quite sure how this makes sense
         """
 
-        self.franka_control()
+        self.franka_solve_joint_qd()
 
         self.solver_vbd.rebuild_bvh(self.state_now)
         for i in range(self.sim_params.sim_substeps):
@@ -545,6 +498,7 @@ class ThighpadPokeTest:
     def gui(self, ui):
         ui.text(f"Wall time: {time.time() - self.sim_start_time}")
         ui.text(f"Sim time: {self.sim_time}")
+        ui.text(f"Current target: {self.target_cur}")
         ui.text(f"Latest volume [cm^3]: {self.log_volumes[-1] * 100**3}")
         ui.separator()
 

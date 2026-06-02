@@ -102,6 +102,12 @@ class ThighpadPokeTest:
 
         # TODO - look into what collision_pipeline options do
         # self.model.collide(self.state_now, self.contacts)
+        # soft_body_contact_margin = 0.01
+        # self.collision_pipeline = newton.CollisionPipeline(
+        #     self.model,
+        #     soft_contact_margin=soft_body_contact_margin,
+        # )
+        # self.contacts = self.collision_pipeline.contacts()
         self.contacts = self.model.contacts()
 
         self.graph = None
@@ -263,6 +269,7 @@ class ThighpadPokeTest:
 
             # # TODO - look into what collision pipelines do
             self.model.collide(self.state_now, self.contacts)
+            # self.collision_pipeline.collide(self.state_now, self.contacts)
             self.solver_vbd.step(self.state_now, self.state_next, self.control, self.contacts, self.sim_params.sim_dt)
 
             # # Swap the states (update state_now to be state_next)
@@ -280,7 +287,8 @@ class ThighpadPokeTest:
 
         if self.graph:
             wp.capture_launch(self.graph)
-            self.sim_time += self.sim_params.sim_dt
+            # self.sim_time += self.sim_params.sim_dt
+            self.sim_time += self.sim_params.frame_dt
         else:
             self.simulate()
         
