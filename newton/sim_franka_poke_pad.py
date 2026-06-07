@@ -17,26 +17,37 @@ import newton_builders
 import utils_FI
 @dataclass
 class PokeParams:
-    ### Motion parameters
-    z_zero = -0.0855
-    # compression_rate = 0.02/60
-    compression_rate = 0.02
+    ### Legacy motion parameters (unused in franka script, kept for reference)
+    z_zero            = -0.0855
+    compression_rate  = 0.02
     compression_depth = 0.002
-    t_start_wait = 0.1
-    # t_hold = 0.2
-    t_hold = 1/60
-    t_stop_wait = 0.05
+    t_start_wait      = 0.1
+    t_stop_wait       = 0.05
+
+    ### Multi-poke pad geometry
+    n_pokes       = 20
+    pad_center_x  = 0.0
+    pad_center_y  = -0.5
+    pad_half_x    = 0.075 / 2    # ±0.0375 m
+    pad_half_y    = 0.065 / 2    # ±0.0325 m
+    z_pad_surface = 0.014        # top surface height [m]
+    z_home        = 0.10         # robot home height [m]
+    z_approach    = 0.024        # z_pad_surface + 0.010 [m]
+    z_poke        = 0.010        # z_pad_surface - 0.004 [m]
+
+    ### Timing per poke phase [s]
+    t_approach = 1.0
+    t_descend  = 4.0
+    t_hold     = 2.0
+    t_ascend   = 4.0
 
 class PokeState(Enum):
-    """
-        State flags for the state machine that moves the poker up and down
-    """
-    INIT = 0
-    TOP = 1
-    DOWN = 2
-    BOTTOM = 3
-    UP = 4
-    STOP = 5
+    INIT     = 0   # brief settle before first poke
+    APPROACH = 1   # move to z_approach above current poke XY
+    DESCEND  = 2   # slow descent from z_approach to z_poke
+    HOLD     = 3   # dwell at z_poke
+    ASCEND   = 4   # rise back to z_approach
+    DONE     = 5   # all pokes complete
 
 @wp.kernel
 def set_gripper_q(joint_q: wp.array2d[float], finger_pos: wp.array[float], idx0: int, idx1: int):
@@ -61,6 +72,13 @@ class ThighpadPokeTest:
         self.sim_params = newton_builders.SimParams()
         self.sim_params.particle_radius = 0.00005
         self.poke_params = PokeParams()
+        self._generate_poke_points()
+
+        # State machine init
+        self.poke_state      = PokeState.INIT
+        self.t_state_start   = 0.0
+        self.pos_state_start = np.array([-0.005, -0.5, self.poke_params.z_home], dtype=np.float32)
+        self.pos_state_end   = np.array([-0.005, -0.5, self.poke_params.z_home], dtype=np.float32)
 
         self.gravity_zero = wp.zeros(1, dtype=wp.vec3)
         self.gravity_earth = wp.array(wp.vec3(0.0, 0.0, -self.sim_params.g), dtype=wp.vec3)
@@ -361,6 +379,80 @@ class ThighpadPokeTest:
         self.particle_debug_radii = wp.full(model.particle_count, debug_radius, dtype=wp.float32)
 
 
+    def _generate_poke_points(self):
+        pp = self.poke_params
+        rng = np.random.default_rng(seed=42)
+        poke_xs = rng.uniform(pp.pad_center_x - pp.pad_half_x, pp.pad_center_x + pp.pad_half_x, pp.n_pokes)
+        poke_ys = rng.uniform(pp.pad_center_y - pp.pad_half_y, pp.pad_center_y + pp.pad_half_y, pp.n_pokes)
+
+        z_poke_surface_top = 0.014
+        self.poke_points = np.column_stack(
+            [poke_xs, poke_ys, np.full(pp.n_pokes, z_poke_surface_top)]
+        ).astype(np.float32)    # shape (n_pokes, 3)
+        self.poke_done      = np.zeros(pp.n_pokes, dtype=bool)
+        self.i_current_poke = 0
+
+    def _control_poke(self):
+        if self.poke_state == PokeState.DONE:
+            return
+
+        t_elapsed = self.sim_time - self.t_state_start
+
+        if self.poke_state == PokeState.INIT:
+            if t_elapsed >= 1.0:
+                self._transition_poke_state(PokeState.APPROACH)
+            return
+
+        pp = self.poke_params
+        durations = {
+            PokeState.APPROACH: pp.t_approach,
+            PokeState.DESCEND:  pp.t_descend,
+            PokeState.HOLD:     pp.t_hold,
+            PokeState.ASCEND:   pp.t_ascend,
+        }
+        dur   = durations[self.poke_state]
+        alpha = float(np.clip(t_elapsed / dur, 0.0, 1.0))
+        target_pos = (1.0 - alpha) * self.pos_state_start + alpha * self.pos_state_end
+
+        self.pos_obj.set_target_position(0, wp.vec3(*target_pos.tolist()))
+
+        if alpha >= 1.0:
+            if self.poke_state == PokeState.APPROACH:
+                self._transition_poke_state(PokeState.DESCEND)
+            elif self.poke_state == PokeState.DESCEND:
+                self._transition_poke_state(PokeState.HOLD)
+            elif self.poke_state == PokeState.HOLD:
+                self._transition_poke_state(PokeState.ASCEND)
+                self.poke_done[self.i_current_poke] = True
+            elif self.poke_state == PokeState.ASCEND:
+                self.i_current_poke += 1
+                if self.i_current_poke >= self.poke_params.n_pokes:
+                    self.poke_state = PokeState.DONE
+                    self.terminate()
+                else:
+                    self._transition_poke_state(PokeState.APPROACH)
+
+    def _transition_poke_state(self, new_state: PokeState):
+        pp  = self.poke_params
+        px  = self.poke_points[self.i_current_poke]
+        start = self.pos_state_end.copy()   # current position = end of previous segment
+
+        if new_state == PokeState.APPROACH:
+            end = px.copy()                                             # (poke_x, poke_y, z_approach)
+        elif new_state == PokeState.DESCEND:
+            end = np.array([px[0], px[1], pp.z_poke], dtype=np.float32)
+        elif new_state == PokeState.HOLD:
+            end = start.copy()                                          # hold in place
+        elif new_state == PokeState.ASCEND:
+            end = np.array([px[0], px[1], pp.z_approach], dtype=np.float32)
+        else:
+            end = start.copy()
+
+        self.pos_state_start = start
+        self.pos_state_end   = end
+        self.t_state_start   = self.sim_time
+        self.poke_state      = new_state
+
     def _log_states(self):
         tube_diameter = 0.0254/16       # 1/16" in meters
         tube_length = 576.22 / 1e3      # 576.22mm in meters
@@ -386,6 +478,7 @@ class ThighpadPokeTest:
         else:
             self.log_volumes.append(0.0)
             self.log_pressures.append(0.0)
+        self.log_pokes.append(self.i_current_poke)
         self.log_sim_times.append(self.sim_time)
     
     def _push_targets_from_gizmos(self):
@@ -413,7 +506,7 @@ class ThighpadPokeTest:
 
 
     def step(self):
-        self.franka_set_ik_target()
+        self._control_poke()
 
 
         # # Update the robot control gizmo & robot configuration
@@ -493,12 +586,29 @@ class ThighpadPokeTest:
                 radii=self.particle_debug_radii,
                 colors=self.particle_debug_colors,
             )
+
+        # Poke target visualization: dark-red = unpoked, dark-green = poked
+        colors_np = np.where(
+            self.poke_done[:, None],
+            np.array([[0.0, 0.4, 0.0]]),
+            np.array([[0.5, 0.0, 0.0]])
+        ).astype(np.float32)
+
+        r_poke_viz_pts = 0.001
+        self.viewer.log_points(
+            name="/poke_targets",
+            points=wp.array(self.poke_points, dtype=wp.vec3),
+            radii=wp.full(self.poke_params.n_pokes, r_poke_viz_pts, dtype=wp.float32),
+            colors=wp.array(colors_np, dtype=wp.vec3),
+        )
+
         self.viewer.end_frame()
 
     def gui(self, ui):
         ui.text(f"Wall time: {time.time() - self.sim_start_time}")
         ui.text(f"Sim time: {self.sim_time}")
-        ui.text(f"Current target: {self.target_cur}")
+        ui.text(f"Poke state: {self.poke_state.name}")
+        ui.text(f"Poke {self.i_current_poke + 1} / {self.poke_params.n_pokes}")
         ui.text(f"Latest volume [cm^3]: {self.log_volumes[-1] * 100**3}")
         ui.separator()
 
