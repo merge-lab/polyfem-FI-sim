@@ -11,3 +11,5 @@ build/
 
 *.csv
 *.ini
+*.lock
+*.bin

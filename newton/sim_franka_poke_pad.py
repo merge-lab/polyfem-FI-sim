@@ -15,6 +15,9 @@ from pxr import Usd
 
 import newton_builders
 import utils_FI
+
+now = datetime.now()
+now_str = now.strftime("%d-%m-%Y_%H:%M:%S")
 @dataclass
 class PokeParams:
     ### Legacy motion parameters (unused in franka script, kept for reference)
@@ -66,11 +69,13 @@ def compute_joint_qd(
     out_qd[i] = (target_q[i] - current_q[i]) * inv_frame_dt
 
 class ThighpadPokeTest:
-    def __init__(self, viewer, verbose=False):
+    def __init__(self, viewer, args, verbose=False):
         self.sim_start_time = 0.0
         self.sim_time = 0.0
         self.sim_params = newton_builders.SimParams()
         self.sim_params.particle_radius = 0.00005
+        self.sim_params.sim_substeps = 5
+        self.sim_params.iterations = 10
         self.poke_params = PokeParams()
         self._generate_poke_points()
 
@@ -83,7 +88,7 @@ class ThighpadPokeTest:
         self.gravity_zero = wp.zeros(1, dtype=wp.vec3)
         self.gravity_earth = wp.array(wp.vec3(0.0, 0.0, -self.sim_params.g), dtype=wp.vec3)
 
-        self.args = self.parse_args()
+        self.args = args
         self.verbose = verbose
 
         # Create scene
@@ -95,14 +100,16 @@ class ThighpadPokeTest:
         # Initialize camera
         self.viewer = viewer
         self.viewer.set_model(self.model)
-        self.viewer.set_camera(wp.vec3([0.15, -0.15, 0.1]), -3.7, -118.0)
-        self.viewer._cam_speed = 0.15
+        if not self.args["headless"]:
+            self.viewer.set_camera(wp.vec3([0.15, -0.15, 0.1]), -3.7, -118.0)
+            self.viewer._cam_speed = 0.15
 
         ### Initialize both solvers
         self.solver_vbd = newton.solvers.SolverVBD(
             model=self.model,
             iterations=self.sim_params.iterations,
             integrate_with_external_rigid_solver=True,
+            # particle_enable_self_contact=True,
             particle_enable_self_contact=True,
             # particle_enable_tile_solve=True,
             particle_self_contact_radius=self.sim_params.particle_self_contact_radius,
@@ -139,7 +146,8 @@ class ThighpadPokeTest:
         self.capture()
 
         ### Initialize gui and logging
-        self.viewer.register_ui_callback(lambda ui: self.gui(ui), position="side")
+        if not self.args["headless"]:
+            self.viewer.register_ui_callback(lambda ui: self.gui(ui), position="side")
         
         # Initialize logging
         self.vol_initial = -1
@@ -148,14 +156,6 @@ class ThighpadPokeTest:
         self.log_pressures: list[float] = []
         self.log_pokes:     list[int] = []
 
-
-    def parse_args(self):
-        parser = argparse.ArgumentParser()
-        parser.add_argument("--no-poke", action="store_true", help="Skip loading the poke fixture")
-        parser.add_argument("--debug_particles", action="store_true", help="Show debug particles")
-        parser.add_argument("--i_poke", default=-1, type=int, help="Which poker to push down. Defaults to (-1), which is 'all'")
-        parser.add_argument("--name", default="", type=str, help="Prefix to filename")
-        return vars(parser.parse_args())
 
     def init_models(self):
         """
@@ -631,8 +631,6 @@ class ThighpadPokeTest:
         self.viewer.close()
 
         # Save log_sim_times, log_volumes, and i_pokes to a csv
-        now = datetime.now()
-        now_str = now.strftime("%d-%m-%Y_%H:%M:%S")
         df_out = pd.DataFrame({
             "sim_times_s": self.log_sim_times,
             "volumes_m3": self.log_volumes,
@@ -640,12 +638,25 @@ class ThighpadPokeTest:
             "i_poke": self.log_pokes
         })
         df_out.to_csv(f"./logs/{self.args['name']}sim-outputs_{now_str}.csv")
-        
+    
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--debug_particles", action="store_true", help="Show debug particles")
+    parser.add_argument("--headless", action="store_true", help="Choose to run without visualization, and instead save a simulation log file")
+    parser.add_argument("--name", default="", type=str, help="Prefix to filename")
+    return vars(parser.parse_args())
 
 if __name__ == "__main__":
-    viewer = newton.viewer.ViewerGL(headless=False)
     verbose = False
-    thighpad_poke_test = ThighpadPokeTest(viewer, False)
+
+    args = parse_args()
+    if args["headless"]:
+        viewer = newton.viewer.ViewerFile(f"{now_str}.bin")
+    else:
+        viewer = newton.viewer.ViewerGL(headless=False)
+
+    thighpad_poke_test = ThighpadPokeTest(viewer, args, False)
     thighpad_poke_test.run()
 
     viewer.close()
