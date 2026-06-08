@@ -157,6 +157,8 @@ class ThighpadPokeTest:
         self.log_pressures: list[float] = []
         self.log_pokes:     list[int] = []
 
+        self.terminated = False
+
 
     def init_models(self):
         """
@@ -426,6 +428,7 @@ class ThighpadPokeTest:
                 self._transition_poke_state(PokeState.ASCEND)
                 self.poke_done[self.i_current_poke] = True
             elif self.poke_state == PokeState.ASCEND:
+                print(f"Poke {self.i_current_poke} finished at sim time {self.sim_time:.3f}, elapsted wall time {time.time() - self.sim_start_time:.3f}")
                 self.i_current_poke += 1
                 if self.i_current_poke >= self.poke_params.n_pokes:
                     self.poke_state = PokeState.DONE
@@ -565,7 +568,7 @@ class ThighpadPokeTest:
 
     def run(self):
         self.sim_start_time = time.time()
-        while self.viewer.is_running():
+        while self.viewer.is_running() and not self.terminated:
             if not self.viewer.is_paused():
                 self.step()
             with wp.ScopedTimer("render", active=False):
@@ -639,6 +642,8 @@ class ThighpadPokeTest:
             "i_poke": self.log_pokes
         })
         df_out.to_csv(f"./logs/{self.args['name']}sim-outputs_{now_str}.csv")
+
+        self.terminated = True
     
 
 def parse_args():
@@ -653,7 +658,7 @@ if __name__ == "__main__":
 
     args = parse_args()
     if args["headless"]:
-        viewer = newton.viewer.ViewerFile(f"{now_str}.bin")
+        viewer = newton.viewer.ViewerFile(f"{now_str}.bin", auto_save=False)
     else:
         viewer = newton.viewer.ViewerGL(headless=False)
 
