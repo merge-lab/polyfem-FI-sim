@@ -76,6 +76,7 @@ class ThighpadPokeTest:
         self.sim_params.particle_radius = 0.00005
         self.sim_params.sim_substeps = 5
         self.sim_params.iterations = 10
+        self.sim_params.fps = 15
         self.poke_params = PokeParams()
         self._generate_poke_points()
 
