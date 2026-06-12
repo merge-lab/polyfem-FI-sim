@@ -11,6 +11,8 @@ import pandas as pd     # Used for mesh pre-processing
 import newton
 import newton.ik as ik
 import warp as wp
+from newton._src.solvers.vbd.rigid_vbd_kernels import _eval_body_particle_contact
+from newton._src.utils.selection import match_labels
 from pxr import Usd
 
 import newton_builders
@@ -68,6 +70,75 @@ def compute_joint_qd(
     i = wp.tid()
     out_qd[i] = (target_q[i] - current_q[i]) * inv_frame_dt
 
+
+@wp.kernel(enable_backward=False)
+def accumulate_soft_contact_body_forces(
+    dt: float,
+    friction_epsilon: float,
+    particle_q: wp.array[wp.vec3],
+    particle_q_prev: wp.array[wp.vec3],
+    particle_radius: wp.array[float],
+    shape_body: wp.array[int],
+    body_q: wp.array[wp.transform],
+    body_q_prev: wp.array[wp.transform],
+    body_qd: wp.array[wp.spatial_vector],
+    body_com: wp.array[wp.vec3],
+    soft_contact_count: wp.array[int],
+    soft_contact_max: int,
+    soft_contact_particle: wp.array[int],
+    soft_contact_shape: wp.array[int],
+    soft_contact_body_pos: wp.array[wp.vec3],
+    soft_contact_body_vel: wp.array[wp.vec3],
+    soft_contact_normal: wp.array[wp.vec3],
+    contact_penalty_k: wp.array[float],
+    contact_material_kd: wp.array[float],
+    contact_material_mu: wp.array[float],
+    body_to_row: wp.array[int],
+    # output
+    body_contact_force: wp.array[wp.vec3],
+):
+    """Accumulate the reaction force that particle-body (soft) contacts exert on selected rigid bodies.
+
+    Replicates the penalty force law the VBD particle solve applies to each particle
+    (newton _eval_body_particle_contact) and atomically adds the negated force to the
+    row assigned to the contacted body. Parallelizes over soft contacts.
+    """
+    t_id = wp.tid()
+    if t_id >= min(soft_contact_max, soft_contact_count[0]):
+        return
+
+    shape_idx = soft_contact_shape[t_id]
+    body_idx = shape_body[shape_idx]
+    if body_idx < 0:
+        return
+    row = body_to_row[body_idx]
+    if row < 0:
+        return
+
+    particle_idx = soft_contact_particle[t_id]
+    f_particle, _hessian = _eval_body_particle_contact(
+        particle_idx,
+        particle_q[particle_idx],
+        particle_q_prev[particle_idx],
+        t_id,
+        contact_penalty_k[t_id],
+        contact_material_kd[t_id],
+        contact_material_mu[t_id],
+        friction_epsilon,
+        particle_radius,
+        shape_body,
+        body_q,
+        body_q_prev,
+        body_qd,
+        body_com,
+        soft_contact_shape,
+        soft_contact_body_pos,
+        soft_contact_body_vel,
+        soft_contact_normal,
+        dt,
+    )
+    wp.atomic_add(body_contact_force, row, -f_particle)
+
 class ThighpadPokeTest:
     def __init__(self, viewer, args, verbose=False):
         self.sim_start_time = 0.0
@@ -97,6 +168,8 @@ class ThighpadPokeTest:
         self.current_q = self.init_q
         init_qs = self.init_q * wp.ones(9, dtype=wp.float32)
         self.model = self.init_models()
+
+        self.add_sensors(self.model) # Add sensors now that the model has been finalized
 
         # Initialize camera
         self.viewer = viewer
@@ -156,6 +229,7 @@ class ThighpadPokeTest:
         self.log_volumes: list[float] = []
         self.log_pressures: list[float] = []
         self.log_pokes:     list[int] = []
+        self.log_forces:    list[float] = []
 
         self.terminated = False
 
@@ -186,10 +260,6 @@ class ThighpadPokeTest:
         ## ======= Add Franka arm =============
         self.add_articulated_franka(self.scene)
         self.set_franka_targets()
-        # self.scene.add_urdf(
-        #     newton.utils.download_asset("franka_emika_panda") / "urdf/fr3_franka_hand.urdf",
-        #     floating=False,
-        # )
 
         ## ======== Add ground plane =======
         # TODO - understand the meaning of these numbers by looking at VBD docs
@@ -244,7 +314,61 @@ class ThighpadPokeTest:
             force_show_colliders=False,
         )
         scene.joint_q[:6] = [0.0, 0.0, 0.0, -1.59695, 0.0, 2.5307]
+    
+    def add_sensors(self, model):
+        # newton.sensors.SensorContact only reads rigid-rigid contacts, and SolverVBD never
+        # populates contacts.force, so the indentor <-> pad contact force is computed manually
+        # from the soft (particle-body) contact data in _update_indentor_force().
+        indentor_bodies = match_labels(model.body_label, "*indentor")
+        assert len(indentor_bodies) == 1, f"Expected exactly one indentor body, matched {indentor_bodies}"
+        self.indentor_body_idx = indentor_bodies[0]
 
+        # Create self.sensor_body_to_row, which is a mask vector that is -1 for all body indices, except
+        # 0 for the indentor body index.
+        body_to_row = np.full(model.body_count, -1, dtype=np.int32)
+        body_to_row[self.indentor_body_idx] = 0
+        self.sensor_body_to_row = wp.array(body_to_row, dtype=int)
+        self.indentor_contact_force = wp.zeros(1, dtype=wp.vec3)
+
+    def _update_indentor_force(self):
+        """Recompute the soft-contact reaction force on the indentor from the last substep.
+
+        With integrate_with_external_rigid_solver=True the VBD coupling is one-way (the pad
+        feels the indentor but no rigid reaction force is ever computed), so we re-evaluate
+        the solver's own penalty force at the converged state and sum the reaction.
+        After the substep state swap, state_now holds post-substep poses and state_next the
+        pre-substep poses, matching the (body_q, body_q_prev) pair the particle solve used.
+        """
+        self.indentor_contact_force.zero_()
+        wp.launch(
+            accumulate_soft_contact_body_forces,
+            dim=self.contacts.soft_contact_max,
+            inputs=[
+                self.sim_params.sim_dt,
+                self.solver_vbd.friction_epsilon,
+                self.state_now.particle_q,
+                self.solver_vbd.particle_q_prev,
+                self.model.particle_radius,
+                self.model.shape_body,
+                self.state_now.body_q,
+                self.state_next.body_q,
+                self.state_now.body_qd,
+                self.model.body_com,
+                self.contacts.soft_contact_count,
+                self.contacts.soft_contact_max,
+                self.contacts.soft_contact_particle,
+                self.contacts.soft_contact_shape,
+                self.contacts.soft_contact_body_pos,
+                self.contacts.soft_contact_body_vel,
+                self.contacts.soft_contact_normal,
+                self.solver_vbd.body_particle_contact_penalty_k,
+                self.solver_vbd.body_particle_contact_material_kd,
+                self.solver_vbd.body_particle_contact_material_mu,
+                self.sensor_body_to_row,
+            ],
+            outputs=[self.indentor_contact_force],
+        )
+        
     def set_franka_targets(self):
         gripper_open = 1.0
         gripper_close = 0.5
@@ -484,6 +608,17 @@ class ThighpadPokeTest:
             self.log_pressures.append(0.0)
         self.log_pokes.append(self.i_current_poke)
         self.log_sim_times.append(self.sim_time)
+
+        # Log the force sensor reading
+        self._update_indentor_force()
+        indentor_force = float(np.linalg.norm(self.indentor_contact_force.numpy()[0]))
+        self.viewer.log_scalar(
+            "Indentor Contact Force",
+            indentor_force,
+            smoothing=10
+        )
+        self.log_forces.append(indentor_force)
+        
     
     def _push_targets_from_gizmos(self):
         """Read gizmo-updated transform and push into IK objectives."""
@@ -511,11 +646,6 @@ class ThighpadPokeTest:
 
     def step(self):
         self._control_poke()
-
-
-        # # Update the robot control gizmo & robot configuration
-        # self._push_targets_from_gizmos()
-        # newton.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, self.state_now)
 
         if self.graph:
             wp.capture_launch(self.graph)
@@ -565,6 +695,7 @@ class ThighpadPokeTest:
             # # We can swap because state_next can really be anything
             self.state_now, self.state_next = self.state_next, self.state_now
             self.sim_time += self.sim_params.sim_dt
+
 
     def run(self):
         self.sim_start_time = time.time()
