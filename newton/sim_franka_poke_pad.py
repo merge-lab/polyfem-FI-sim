@@ -11,6 +11,7 @@ import pandas as pd     # Used for mesh pre-processing
 import newton
 import newton.ik as ik
 import warp as wp
+from newton._src.solvers.vbd.particle_vbd_kernels import evaluate_volumetric_neo_hookean_force_and_hessian
 from newton._src.solvers.vbd.rigid_vbd_kernels import _eval_body_particle_contact
 from newton._src.utils.selection import match_labels
 from pxr import Usd
@@ -139,6 +140,75 @@ def accumulate_soft_contact_body_forces(
     )
     wp.atomic_add(body_contact_force, row, -f_particle)
 
+
+@wp.kernel(enable_backward=False)
+def flag_contacted_particles(
+    shape_body: wp.array[int],
+    soft_contact_count: wp.array[int],
+    soft_contact_max: int,
+    soft_contact_particle: wp.array[int],
+    soft_contact_shape: wp.array[int],
+    body_to_row: wp.array[int],
+    # output
+    particle_contact_flag: wp.array[int],
+):
+    """Mark particles that have an active soft contact against a sensed rigid body."""
+    t_id = wp.tid()
+    if t_id >= min(soft_contact_max, soft_contact_count[0]):
+        return
+
+    body_idx = shape_body[soft_contact_shape[t_id]]
+    if body_idx < 0:
+        return
+    if body_to_row[body_idx] < 0:
+        return
+    particle_contact_flag[soft_contact_particle[t_id]] = 1
+
+
+@wp.kernel(enable_backward=False)
+def accumulate_elastic_vertex_forces(
+    dt: float,
+    particle_q: wp.array[wp.vec3],
+    particle_q_prev: wp.array[wp.vec3],
+    tet_indices: wp.array2d[wp.int32],
+    tet_poses: wp.array[wp.mat33],
+    tet_materials: wp.array2d[float],
+    particle_contact_flag: wp.array[int],
+    # output
+    elastic_force: wp.array[wp.vec3],
+):
+    """Accumulate the internal FEM (elastic + damping) force at contacted vertices.
+
+    Nodal residual method: at equilibrium of a contacted vertex, internal force +
+    contact force + gravity = 0, so summing the internal force over the contact
+    patch yields the reaction force on the contacting rigid body (patch gravity is
+    negligible). Parallelizes over tets; each tet adds its contribution to each of
+    its flagged vertices.
+    """
+    tet_id = wp.tid()
+
+    f_tet = wp.vec3(0.0)
+    for v_order in range(4):
+        vid = tet_indices[tet_id, v_order]
+        if particle_contact_flag[vid] == 1:
+            f, _hessian = evaluate_volumetric_neo_hookean_force_and_hessian(
+                tet_id,
+                v_order,
+                particle_q_prev,
+                particle_q,
+                tet_indices,
+                tet_poses[tet_id],
+                tet_materials[tet_id, 0],
+                tet_materials[tet_id, 1],
+                tet_materials[tet_id, 2],
+                dt,
+            )
+            f_tet += f
+
+    if wp.length_sq(f_tet) > 0.0:
+        wp.atomic_add(elastic_force, 0, f_tet)
+
+
 class ThighpadPokeTest:
     def __init__(self, viewer, args, verbose=False):
         self.sim_start_time = 0.0
@@ -208,6 +278,12 @@ class ThighpadPokeTest:
             update_mass_matrix_interval=self.sim_params.sim_substeps
         )
 
+        # Initialize collision pipeline with non-default soft contact margin
+        self.collision_pipeline = newton.CollisionPipeline(
+            self.model,
+            soft_contact_margin=self.sim_params.particle_self_contact_margin
+        )
+
         # Initialize IK
         self.init_ik()
         self.solver_ik = ik.IKSolver(
@@ -230,6 +306,8 @@ class ThighpadPokeTest:
         self.log_pressures: list[float] = []
         self.log_pokes:     list[int] = []
         self.log_forces:    list[float] = []
+        self.log_forces_penalty: list[float] = []
+        self.log_forces_elastic: list[float] = []
 
         self.terminated = False
 
@@ -330,12 +408,22 @@ class ThighpadPokeTest:
         self.sensor_body_to_row = wp.array(body_to_row, dtype=int)
         self.indentor_contact_force = wp.zeros(1, dtype=wp.vec3)
 
-    def _update_indentor_force(self):
-        """Recompute the soft-contact reaction force on the indentor from the last substep.
+        # Elastic (nodal internal force) sensor buffers
+        self.particle_contact_flag = wp.zeros(model.particle_count, dtype=int)
+        self.indentor_elastic_force = wp.zeros(1, dtype=wp.vec3)
 
-        With integrate_with_external_rigid_solver=True the VBD coupling is one-way (the pad
-        feels the indentor but no rigid reaction force is ever computed), so we re-evaluate
-        the solver's own penalty force at the converged state and sum the reaction.
+    def _update_indentor_force(self):
+        """Recompute the contact force on the indentor from the last substep.
+
+        Two independent readings are computed:
+        - indentor_contact_force: reaction of the VBD contact-resolution penalty.
+          With integrate_with_external_rigid_solver=True the VBD coupling is one-way (the pad
+          feels the indentor but no rigid reaction force is ever computed), so we re-evaluate
+          the solver's own penalty force at the converged state and sum the reaction.
+        - indentor_elastic_force: internal FEM (elastic + damping) force summed over the
+          contacted vertices (nodal residual method) — the reaction contributed by the
+          deformed pad material.
+
         After the substep state swap, state_now holds post-substep poses and state_next the
         pre-substep poses, matching the (body_q, body_q_prev) pair the particle solve used.
         """
@@ -368,7 +456,40 @@ class ThighpadPokeTest:
             ],
             outputs=[self.indentor_contact_force],
         )
-        
+
+        # Elastic reaction: flag the contacted pad vertices, then sum their internal FEM forces
+        self.particle_contact_flag.zero_()
+        self.indentor_elastic_force.zero_()
+        wp.launch(
+            flag_contacted_particles,
+            dim=self.contacts.soft_contact_max,
+            inputs=[
+                self.model.shape_body,
+                self.contacts.soft_contact_count,
+                self.contacts.soft_contact_max,
+                self.contacts.soft_contact_particle,
+                self.contacts.soft_contact_shape,
+                self.sensor_body_to_row,
+            ],
+            outputs=[self.particle_contact_flag],
+        )
+        wp.launch(
+            accumulate_elastic_vertex_forces,
+            dim=self.model.tet_indices.shape[0],
+            inputs=[
+                self.sim_params.sim_dt,
+                self.state_now.particle_q,
+                self.solver_vbd.particle_q_prev,
+                self.model.tet_indices,
+                self.model.tet_poses,
+                self.model.tet_materials,
+                self.particle_contact_flag,
+            ],
+            outputs=[self.indentor_elastic_force],
+        )
+
+        print(f"Soft countact count: {self.contacts.soft_contact_count.numpy()[0]}/{self.contacts.soft_contact_max}")
+
     def set_franka_targets(self):
         gripper_open = 1.0
         gripper_close = 0.5
@@ -609,15 +730,19 @@ class ThighpadPokeTest:
         self.log_pokes.append(self.i_current_poke)
         self.log_sim_times.append(self.sim_time)
 
-        # Log the force sensor reading
+        # Log the force sensor reading: contact penalty reaction + elastic (material) reaction
         self._update_indentor_force()
-        indentor_force = float(np.linalg.norm(self.indentor_contact_force.numpy()[0]))
-        self.viewer.log_scalar(
-            "Indentor Contact Force",
-            indentor_force,
-            smoothing=10
-        )
-        self.log_forces.append(indentor_force)
+        f_penalty = self.indentor_contact_force.numpy()[0]
+        f_elastic = self.indentor_elastic_force.numpy()[0]
+        force_penalty = float(np.linalg.norm(f_penalty))
+        force_elastic = float(np.linalg.norm(f_elastic))
+        force_total = float(np.linalg.norm(f_penalty + f_elastic))
+        self.viewer.log_scalar("Indentor Contact Force", force_total)
+        self.viewer.log_scalar("Indentor Force (penalty)", force_penalty)
+        self.viewer.log_scalar("Indentor Force (elastic)", force_elastic)
+        self.log_forces.append(force_total)
+        self.log_forces_penalty.append(force_penalty)
+        self.log_forces_elastic.append(force_elastic)
         
     
     def _push_targets_from_gizmos(self):
@@ -686,7 +811,8 @@ class ThighpadPokeTest:
             self.model.gravity.assign(self.gravity_earth)
             
             # Collision detection
-            self.model.collide(self.state_now, self.contacts)
+            # self.model.collide(self.state_now, self.contacts)
+            self.collision_pipeline.collide(self.state_now, self.contacts)
 
             # VBD sim step of soft bodies (it'll ignore rigids bc we configured it to earlier.)
             self.solver_vbd.step(self.state_now, self.state_next, self.control, self.contacts, self.sim_params.sim_dt)
@@ -737,6 +863,25 @@ class ThighpadPokeTest:
             colors=wp.array(colors_np, dtype=wp.vec3),
         )
 
+        if self.contacts.soft_contact_count.numpy()[0] > 0:
+            contacted_particle_idxs = self.contacts.soft_contact_particle.numpy()
+            contacted_particle_idxs = contacted_particle_idxs[contacted_particle_idxs >= 0]
+            contacted_color_np = np.array([0.0, 0.0, 0.5])
+            contacted_colors_np = np.tile(contacted_color_np, (len(contacted_particle_idxs), 1)).astype(np.float32)
+            self.viewer.log_points(
+                name="/soft_contact_particles",
+                points=wp.array(self.state_now.particle_q.numpy()[contacted_particle_idxs, :], dtype=wp.vec3),
+                radii = wp.full(len(contacted_particle_idxs), 0.0005, dtype=wp.float32),
+                colors = wp.array(contacted_colors_np, dtype=wp.vec3)
+            )
+        else:
+            self.viewer.log_points(
+                name="/soft_contact_particles",
+                points=wp.array([]),
+                radii=wp.array([]),
+                colors=wp.array([])
+            )
+
         self.viewer.end_frame()
 
     def gui(self, ui):
@@ -770,7 +915,10 @@ class ThighpadPokeTest:
             "sim_times_s": self.log_sim_times,
             "volumes_m3": self.log_volumes,
             "pressures_atm": self.log_pressures,
-            "i_poke": self.log_pokes
+            "i_poke": self.log_pokes,
+            "force_total_N": self.log_forces,
+            "force_penalty_N": self.log_forces_penalty,
+            "force_elastic_N": self.log_forces_elastic
         })
         df_out.to_csv(f"./logs/{self.args['name']}sim-outputs_{now_str}.csv")
 
