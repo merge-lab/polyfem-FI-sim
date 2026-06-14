@@ -72,17 +72,17 @@ def create_yam_arm(scene: newton.ModelBuilder, xform: wp.transform):
 
 def create_thighpad(
         scene: newton.ModelBuilder, pos: wp.vec3, rot: wp.quat, 
-        rho: float, k_mu: float, k_lambda: float, k_damp: float
+        rho: float, k_mu: float, k_lambda: float, k_damp: float,
+        filepath: str = "../Assets/Thigh-pad/tets_fine/"
 ):
     """
         Load the thigh pad and place it in the simulation scene
     """
     # Fetching thighpad asset using the USD ecosystem
-    asset_dir = Path("../Assets/Thigh-pad/tets_fine/")
+    asset_dir = Path(filepath)
     # asset_dir = "../Assets/Thigh-pad/mesh_l=0.05_e=2e-3"
     # asset_dir = "../Assets/Thigh-pad/tets_finer"
     modelpath_thighpad = asset_dir / "model.usda"
-    modelpath_thighpad = "../Assets/Thigh-pad/tets_fine/model.usda"
     stage_thighpad = Usd.Stage.Open(str(modelpath_thighpad))
     prim_thighpad = stage_thighpad.GetPrimAtPath("/root/Model/TetMesh")
     tetmesh_thighpad = newton.TetMesh.create_from_usd(prim_thighpad)
