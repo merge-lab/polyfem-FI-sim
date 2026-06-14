@@ -296,7 +296,6 @@ class ThighpadPokeTest:
 
 
     def _control_poker(self):
-
         if self.poke_state == PokeState.DOWN:
             if self.sim_time < self.poke_params.t_start_wait:
                 # Hold for a bit at the start to let signal stabilize
@@ -369,7 +368,9 @@ class ThighpadPokeTest:
         target_qs = self.current_q * control_mask.view(wp.float32)
         target_qds = dq * control_mask.view(wp.float32)
         wp.copy(self.state_now.joint_q, wp.array(target_qs, dtype=wp.float32))
-        wp.copy(self.state_now.joint_qd, wp.array(target_qds, dtype=wp.float32))
+        # wp.copy(self.state_now.joint_qd, wp.array(target_qds, dtype=wp.float32))
+
+        print(f"Target q: {self.current_q}")
 
         return
 

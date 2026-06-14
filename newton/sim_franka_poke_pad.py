@@ -337,7 +337,6 @@ class ThighpadPokeTest:
 
         ## ======= Add Franka arm =============
         self.add_articulated_franka(self.scene)
-        self.set_franka_targets()
 
         ## ======== Add ground plane =======
         # TODO - understand the meaning of these numbers by looking at VBD docs
@@ -490,35 +489,6 @@ class ThighpadPokeTest:
 
         print(f"Soft countact count: {self.contacts.soft_contact_count.numpy()[0]}/{self.contacts.soft_contact_max}")
 
-    def set_franka_targets(self):
-        gripper_open = 1.0
-        gripper_close = 0.5
-
-        # Keyframe sequence: approach, descend, pinch, lift, hold, place, release, retract
-        # [duration, px, py, pz, qx, qy, qz, qw, gripper_activation] (positions in meters)
-        self.robot_key_poses = np.array(
-            [
-                # Initial pose
-                [1.0, -0.005, -0.5, 0.1, 1, 0.0, 0.0, 0.0],
-                # Descend to right abovbe pad
-                [1.0, -0.005, -0.5, 0.02, 1, 0.0, 0.0, 0.0],
-                # Press
-                [4.0, -0.005, -0.5, 0.01, 1, 0.0, 0.0, 0.0],
-                # Lift back to just above pad
-                [4.0, -0.005, -0.5, 0.02, 1, 0.0, 0.0, 0.0],
-                # Return to original configuration and end
-                [2.0, -0.005, -0.5, 0.35, 1, 0.0, 0.0, 0.0],
-            ],
-            dtype=np.float32,
-        )
-
-        self.targets = self.robot_key_poses[:, 1:]
-        self.transition_duration = self.robot_key_poses[:, 0]
-        self.target = self.targets[0]
-
-        self.robot_key_poses_time = np.cumsum(self.robot_key_poses[:, 0])
-        print(f"Robot key poses times: {self.robot_key_poses_time}")
-
     def init_ik(self):
         """
         IK setup (single problem, single EE)
@@ -542,8 +512,9 @@ class ThighpadPokeTest:
         self.target_joint_q = wp.zeros(self.n_coords, dtype=float) # Buffer to store ik result (joint q targets)
         self.target_joint_qd = wp.empty_like(self.state_now.joint_qd)
 
-        init_target_pos = wp.vec3(*self.targets[0][:3].tolist())
-        init_target_rot = wp.vec4(*self.targets[0][3:7].tolist())
+        init_pose = np.array([-0.005, -0.5, 0.1, 1, 0.0, 0.0, 0.0], dtype=np.float32)
+        init_target_pos = wp.vec3(init_pose[:3].tolist())
+        init_target_rot = wp.vec4(init_pose[3:7].tolist())
 
         # Position objective
         self.pos_obj = ik.IKObjectivePosition(
@@ -576,26 +547,6 @@ class ThighpadPokeTest:
         )
         self.ik_iters = 24
 
-
-    def franka_set_ik_target(self):
-        """Interpolate keyframes and update IK target arrays (CPU, called before graph launch)."""
-        if self.sim_time >= self.robot_key_poses_time[-1]:
-            return
-
-        current_interval = np.searchsorted(self.robot_key_poses_time, self.sim_time)
-
-        # Interpolate between previous and current keyframe target
-        t_start = self.robot_key_poses_time[current_interval - 1] if current_interval > 0 else 0.0
-        t_end = self.robot_key_poses_time[current_interval]
-        alpha = float(np.clip((self.sim_time - t_start) / (t_end - t_start), 0.0, 1.0))
-
-        self.target_cur = self.targets[current_interval]
-        target_prev = self.targets[current_interval - 1] if current_interval > 0 else self.target_cur
-        target_interp = (1.0 - alpha) * target_prev + alpha * self.target_cur
-
-        # Update IK target arrays on GPU (read by IK solver inside captured graph)
-        self.pos_obj.set_target_position(0, wp.vec3(*target_interp[:3].tolist()))
-        self.rot_obj.set_target_rotation(0, wp.vec4(*target_interp[3:7].tolist()))
 
     def franka_solve_joint_qd(self):
         # IK solve once per frame (GPU, captured in graph)
@@ -863,24 +814,16 @@ class ThighpadPokeTest:
             colors=wp.array(colors_np, dtype=wp.vec3),
         )
 
-        if self.contacts.soft_contact_count.numpy()[0] > 0:
-            contacted_particle_idxs = self.contacts.soft_contact_particle.numpy()
-            contacted_particle_idxs = contacted_particle_idxs[contacted_particle_idxs >= 0]
-            contacted_color_np = np.array([0.0, 0.0, 0.5])
-            contacted_colors_np = np.tile(contacted_color_np, (len(contacted_particle_idxs), 1)).astype(np.float32)
-            self.viewer.log_points(
-                name="/soft_contact_particles",
-                points=wp.array(self.state_now.particle_q.numpy()[contacted_particle_idxs, :], dtype=wp.vec3),
-                radii = wp.full(len(contacted_particle_idxs), 0.0005, dtype=wp.float32),
-                colors = wp.array(contacted_colors_np, dtype=wp.vec3)
-            )
-        else:
-            self.viewer.log_points(
-                name="/soft_contact_particles",
-                points=wp.array([]),
-                radii=wp.array([]),
-                colors=wp.array([])
-            )
+        contacted_particle_idxs = self.contacts.soft_contact_particle.numpy()
+        contacted_particle_idxs = contacted_particle_idxs[contacted_particle_idxs >= 0]
+        contacted_color_np = np.array([0.0, 0.0, 0.5])
+        contacted_colors_np = np.tile(contacted_color_np, (len(contacted_particle_idxs), 1)).astype(np.float32)
+        self.viewer.log_points(
+            name="/soft_contact_particles",
+            points=wp.array(self.state_now.particle_q.numpy()[contacted_particle_idxs, :], dtype=wp.vec3),
+            radii = wp.full(len(contacted_particle_idxs), 0.0005, dtype=wp.float32),
+            colors = wp.array(contacted_colors_np, dtype=wp.vec3)
+        )
 
         self.viewer.end_frame()
 
