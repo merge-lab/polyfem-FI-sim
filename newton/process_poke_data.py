@@ -32,7 +32,31 @@ INTER_POKE_GAP  = 5.0       # s of "dead time" between the end of one CSV and st
 
 # Simulation contact-surface reference position (metres).
 # x_compression_start in the real data maps to this z value in the sim.
-Z_ZERO_M = -0.0855
+Z_ZERO_M = -0.086
+
+# Real poke numbering:
+# | 1 | 2 | 3 |
+# |---+---+---|
+# | 4 | 5 | 6 |
+# |---+---+---|
+# | 7 | 8 | 9 |
+# Simulated poke numbering
+# | 2 | 6 | 7 |
+# |---+---+---|
+# | 1 | 5 | 8 |
+# |---+---+---|
+# | 3 | 4 | 9 |
+dict_poke_idx_real2sim = {
+    1: 2,
+    2: 6,
+    3: 7,
+    4: 1,
+    5: 5,
+    6: 8,
+    7: 3,
+    8: 4,
+    9: 9
+}
 
 
 def load_csv(i_poke: int, trial: int) -> pd.DataFrame:
@@ -73,7 +97,7 @@ def main():
         dx_mm = x_bottom_mm - x_comp_mm  # negative (compression)
 
         print(
-            f"Poke {i_poke}: compression starts at raw t={t_comp_raw:.3f}s, "
+            f"Real poke {i_poke}: compression starts at raw t={t_comp_raw:.3f}s, "
             f"x_contact={x_comp_mm:.3f}mm, x_bottom={x_bottom_mm:.3f}mm, "
             f"dx={dx_mm:.3f}mm"
         )
@@ -98,7 +122,8 @@ def main():
             "force_N":      df["force_N"].values,
             "pressure_atm": df["pressure_atm"].values,
         })
-        out_path = OUT_DIR / f"adjusted_idx{i_poke}_1.csv"
+        i_poke_sim = dict_poke_idx_real2sim[i_poke]
+        out_path = OUT_DIR / f"adjusted_idx{i_poke_sim}_1.csv"
         df_out.to_csv(out_path, index=False)
         print(f"  → saved {out_path}  (shifted t=[{t_start_shifted:.2f}, {t_end_shifted:.2f}]s)")
 

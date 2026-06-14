@@ -368,7 +368,7 @@ class ThighpadPokeTest:
         target_qs = self.current_q * control_mask.view(wp.float32)
         target_qds = dq * control_mask.view(wp.float32)
         wp.copy(self.state_now.joint_q, wp.array(target_qs, dtype=wp.float32))
-        # wp.copy(self.state_now.joint_qd, wp.array(target_qds, dtype=wp.float32))
+        wp.copy(self.state_now.joint_qd, wp.array(target_qds, dtype=wp.float32))
 
         print(f"Target q: {self.current_q}")
 
@@ -428,6 +428,7 @@ class ThighpadPokeTest:
         ui.text(f"Wall time: {time.time() - self.sim_start_time}")
         ui.text(f"Sim time: {self.sim_time}")
         ui.text(f"Latest volume [cm^3]: {self.log_volumes[-1] * 100**3}")
+        ui.text(f"Latest pressure [atm]: {self.log_pressures[-1]}")
         ui.text(f"Poke state: {self.poke_state}")
         ui.separator()
 

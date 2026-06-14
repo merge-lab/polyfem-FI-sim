@@ -274,19 +274,23 @@ def main() -> None:
             for sid in group_ids:
                 mesh = groups[sid].get_mesh(plane)
                 if mesh is not None:
-                    implot3d.set_next_fill_style(colors[sid])
                     implot3d.plot_mesh(
                         f"Group {sid}", mesh,
-                        implot3d.MeshFlags_.no_legend  # legend is in our custom panel
+                        implot3d.Spec(
+                            fill_color=colors[sid],
+                            flags=implot3d.MeshFlags_.no_legend,  # legend is in our custom panel
+                        ),
                     )
 
             if unsel_data is not None:
                 mesh = unsel_data.get_mesh(plane)
                 if mesh is not None:
-                    implot3d.set_next_fill_style(UNSELECTED_COLOR)
                     implot3d.plot_mesh(
                         "Unselected", mesh,
-                        implot3d.MeshFlags_.no_legend
+                        implot3d.Spec(
+                            fill_color=UNSELECTED_COLOR,
+                            flags=implot3d.MeshFlags_.no_legend,
+                        ),
                     )
 
             if state.show_vertices:
@@ -299,14 +303,15 @@ def main() -> None:
                 else:
                     xs, ys, zs = bv_xs, bv_ys, bv_zs
                 if len(xs):
-                    implot3d.set_next_marker_style(
-                        implot3d.Marker_.circle, size=2.0,
-                        fill=ImVec4(1.0, 1.0, 1.0, 0.8),
-                        outline=ImVec4(0.0, 0.0, 0.0, 0.0),
-                    )
                     implot3d.plot_scatter(
                         "##bv", xs, ys, zs,
-                        implot3d.ScatterFlags_.no_legend,
+                        implot3d.Spec(
+                            marker=implot3d.Marker_.circle,
+                            marker_size=2.0,
+                            marker_fill_color=ImVec4(1.0, 1.0, 1.0, 0.8),
+                            marker_line_color=ImVec4(0.0, 0.0, 0.0, 0.0),
+                            flags=implot3d.ScatterFlags_.no_legend,
+                        ),
                     )
 
             implot3d.end_plot()

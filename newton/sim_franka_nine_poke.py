@@ -38,22 +38,26 @@ class PokeParams:
     pad_half_y    = 0.065 / 2    # ±0.0325 m
     z_pad_surface = 0.014        # top surface height [m]
     z_home        = 0.10         # robot home height [m]
+    ### Unused — Z now comes from the real-robot CSV trajectory (see _load_trajectories)
     z_approach    = 0.024        # z_pad_surface + 0.010 [m]
     z_poke        = 0.010        # z_pad_surface - 0.004 [m]
 
+    ### Real-robot Z-trajectory data (one CSV per poke; position_m is already in world-Z frame)
+    traj_dir     = "../Data/Gilbert/Thigh_pad/pokes/adjusted"
+    traj_pattern = "adjusted_newton_poke_{i}_1.csv"
+
     ### Timing per poke phase [s]
-    t_approach = 1.0
+    t_approach = 1.0             # XY transit between sites
+    ### Unused — descend/hold/ascend Z profile now supplied by the CSV trajectory
     t_descend  = 4.0
     t_hold     = 2.0
     t_ascend   = 4.0
 
 class PokeState(Enum):
     INIT     = 0   # brief settle before first poke
-    APPROACH = 1   # move to z_approach above current poke XY
-    DESCEND  = 2   # slow descent from z_approach to z_poke
-    HOLD     = 3   # dwell at z_poke
-    ASCEND   = 4   # rise back to z_approach
-    DONE     = 5   # all pokes complete
+    APPROACH = 1   # move XY to current poke site at the trajectory rest height
+    POKE     = 2   # play back the real-robot Z trajectory for this site
+    DONE     = 3   # all pokes complete
 
 @wp.kernel
 def set_gripper_q(joint_q: wp.array2d[float], finger_pos: wp.array[float], idx0: int, idx1: int):
@@ -220,6 +224,7 @@ class ThighpadPokeTest:
         self.sim_params.fps = 15
         self.poke_params = PokeParams()
         self._generate_poke_points()
+        self._load_trajectories()
 
         # State machine init
         self.poke_state      = PokeState.INIT
@@ -584,6 +589,7 @@ class ThighpadPokeTest:
         pokesite_spacing_x = pp.pad_half_x * 2 / 3
         pokesite_spacing_y = pp.pad_half_y * 2 / 3
         
+        # TODO - rewrite this to use meshgrid?
         poke_xs = [
             pp.pad_center_x - pokesite_spacing_x,
             pp.pad_center_x,
@@ -617,6 +623,25 @@ class ThighpadPokeTest:
         self.poke_done      = np.zeros(pp.n_pokes, dtype=bool)
         self.i_current_poke = 0
 
+    def _load_trajectories(self):
+        """Load each poke's real-robot Z trajectory from CSV.
+
+        position_m is already in the sim's world-Z frame (rest ≈ z_pad_surface + 1mm), so it
+        is used directly as the IK end-effector Z setpoint during the POKE state. CSV file i
+        drives the i-th poke in the grid sequence (1:1 by index).
+        """
+        pp = self.poke_params
+        data_dir = Path(pp.traj_dir)
+        self.poke_traj_t:   list[np.ndarray] = []
+        self.poke_traj_z:   list[np.ndarray] = []
+        self.poke_traj_dur: list[float]      = []
+        for i in range(1, pp.n_pokes + 1):
+            df = pd.read_csv(data_dir / pp.traj_pattern.format(i=i))
+            t_rel = df["time_s"].values - df["time_s"].values[0]
+            self.poke_traj_t.append(t_rel)
+            self.poke_traj_z.append(df["position_m"].values)
+            self.poke_traj_dur.append(float(t_rel[-1]))
+
     def _control_poke(self):
         if self.poke_state == PokeState.DONE:
             return
@@ -629,49 +654,55 @@ class ThighpadPokeTest:
             return
 
         pp = self.poke_params
-        durations = {
-            PokeState.APPROACH: pp.t_approach,
-            PokeState.DESCEND:  pp.t_descend,
-            PokeState.HOLD:     pp.t_hold,
-            PokeState.ASCEND:   pp.t_ascend,
-        }
-        dur   = durations[self.poke_state]
+
+        if self.poke_state == PokeState.POKE:
+            # Play back the real-robot Z trajectory; XY stays fixed at the poke site.
+            i  = self.i_current_poke
+            px = self.poke_points[i]
+            dur = self.poke_traj_dur[i]
+            z = float(np.interp(
+                t_elapsed,
+                self.poke_traj_t[i],
+                self.poke_traj_z[i],
+                left=float(self.poke_traj_z[i][0]),
+                right=float(self.poke_traj_z[i][-1]),
+            ))
+            target_pos = np.array([px[0], px[1], z], dtype=np.float32)
+            self.pos_obj.set_target_position(0, wp.vec3(*target_pos.tolist()))
+            # Track current target so the next APPROACH chains from the trajectory's last sample.
+            self.pos_state_end = target_pos
+
+            if t_elapsed >= dur:
+                self.poke_done[i] = True
+                print(f"Poke {i} finished at sim time {self.sim_time:.3f}, elapsed wall time {time.time() - self.sim_start_time:.3f}")
+                self.i_current_poke += 1
+                if self.i_current_poke >= pp.n_pokes:
+                    self.poke_state = PokeState.DONE
+                    self.terminate()
+                else:
+                    self._transition_poke_state(PokeState.APPROACH)
+            return
+
+        # APPROACH: linear XY+Z move to the poke site at the trajectory rest height.
+        dur   = pp.t_approach
         alpha = float(np.clip(t_elapsed / dur, 0.0, 1.0))
         target_pos = (1.0 - alpha) * self.pos_state_start + alpha * self.pos_state_end
 
         self.pos_obj.set_target_position(0, wp.vec3(*target_pos.tolist()))
 
         if alpha >= 1.0:
-            if self.poke_state == PokeState.APPROACH:
-                self._transition_poke_state(PokeState.DESCEND)
-            elif self.poke_state == PokeState.DESCEND:
-                self._transition_poke_state(PokeState.HOLD)
-            elif self.poke_state == PokeState.HOLD:
-                self._transition_poke_state(PokeState.ASCEND)
-                self.poke_done[self.i_current_poke] = True
-            elif self.poke_state == PokeState.ASCEND:
-                print(f"Poke {self.i_current_poke} finished at sim time {self.sim_time:.3f}, elapsted wall time {time.time() - self.sim_start_time:.3f}")
-                self.i_current_poke += 1
-                if self.i_current_poke >= self.poke_params.n_pokes:
-                    self.poke_state = PokeState.DONE
-                    self.terminate()
-                else:
-                    self._transition_poke_state(PokeState.APPROACH)
+            self._transition_poke_state(PokeState.POKE)
 
     def _transition_poke_state(self, new_state: PokeState):
-        pp  = self.poke_params
-        px  = self.poke_points[self.i_current_poke]
         start = self.pos_state_end.copy()   # current position = end of previous segment
+        px    = self.poke_points[self.i_current_poke]
 
         if new_state == PokeState.APPROACH:
-            end = px.copy()                                             # (poke_x, poke_y, z_approach)
-        elif new_state == PokeState.DESCEND:
-            end = np.array([px[0], px[1], pp.z_poke], dtype=np.float32)
-        elif new_state == PokeState.HOLD:
-            end = start.copy()                                          # hold in place
-        elif new_state == PokeState.ASCEND:
-            end = np.array([px[0], px[1], pp.z_approach], dtype=np.float32)
+            # Move XY to the poke site at the trajectory's rest/start height.
+            z_rest = float(self.poke_traj_z[self.i_current_poke][0])
+            end = np.array([px[0], px[1], z_rest], dtype=np.float32)
         else:
+            # POKE: Z is driven frame-by-frame from the trajectory, so no fixed end target.
             end = start.copy()
 
         self.pos_state_start = start

@@ -13,12 +13,23 @@ from pxr import Usd
 import newton_builders
 import utils_FI
 
+dict_poke_idx_real2sim = {
+    1: 2,
+    2: 6,
+    3: 7,
+    4: 1,
+    5: 5,
+    6: 8,
+    7: 3,
+    8: 4,
+    9: 9
+}
 
 class ThighpadPokeTestRealistic:
     def __init__(self, viewer, verbose=False):
         self.sim_time = 0.0
         self.sim_params = newton_builders.SimParams()
-        # self.sim_params.frame
+        self.sim_params.fps = 30
 
         self.sim_start_time = 0.0
 
@@ -34,7 +45,8 @@ class ThighpadPokeTestRealistic:
         self._load_trajectories()
 
         # Starting joint position — taken from the first data point of poke 1's trajectory
-        self.init_q   = float(self.poke_trajs[0]["z_position_m"].iloc[0])
+        # self.init_q   = float(self.poke_trajs[0]["position_m"].iloc[0])
+        self.init_q = -0.085
         self.current_q = self.init_q
 
         self.i_current_poke = 0
@@ -61,6 +73,10 @@ class ThighpadPokeTestRealistic:
         self.solver_rigid = None
         if not self.args["no_poke"]:
             self.solver_rigid = newton.solvers.SolverMuJoCo(self.model)
+            # self.solver_rigid = newton.solvers.SolverFeatherstone(
+            #     self.model,
+            #     update_mass_matrix_interval=self.sim_params.sim_substeps
+            # )
 
         self.state_now  = self.model.state()
         self.state_next = self.model.state()
@@ -84,12 +100,16 @@ class ThighpadPokeTestRealistic:
     # ── trajectory loading ────────────────────────────────────────────────────
 
     def _load_trajectories(self):
-        data_dir         = Path("../Data/Gilbert/Thighpad/pokes/adjusted")
-        self.poke_windows = pd.read_csv(data_dir / "poke_windows.csv")
+        data_dir         = Path("../Data/Gilbert/Thigh_pad/pokes/adjusted")
         self.poke_trajs = []
+        poke_end_times = []
         for i in range(1, 10):
-            df = pd.read_csv(data_dir / f"adjusted_idx{i}_1.csv")
+            df = pd.read_csv(data_dir / f"adjusted_newton_poke_{i}_1.csv")
             self.poke_trajs.append(df)
+            start_time_i = df.iloc[-1]["time_s"]
+            poke_end_times.append(start_time_i)
+
+        self.poke_end_times = np.array(poke_end_times)
 
     # ── arg parsing ───────────────────────────────────────────────────────────
 
@@ -221,37 +241,50 @@ class ThighpadPokeTestRealistic:
     # ── trajectory-based poke controller ─────────────────────────────────────
 
     def _control_poker_from_trajectory(self):
-        # Advance poke index while the current window has expired
-        while (self.i_current_poke < 8 and
-               self.sim_time > self.poke_windows.loc[self.i_current_poke, "t_end"]):
-            self.i_current_poke += 1
-
         # All 9 pokes finished
-        if self.i_current_poke == 8 and self.sim_time > self.poke_windows.loc[8, "t_end"]:
+        if self.i_current_poke > 8 and self.sim_time > self.poke_end_times[-1]:
             self.terminate()
             return
+
+        # Advance poke index if the current window has expired
+        if self.i_current_poke < 8 and self.sim_time > self.poke_end_times[self.i_current_poke]:
+            self.i_current_poke += 1
 
         # Interpolate target z from the active poke's trajectory
         traj = self.poke_trajs[self.i_current_poke]
         target_q = float(np.interp(
             self.sim_time,
             traj["time_s"].values,
-            traj["z_position_m"].values,
-            left=float(traj["z_position_m"].iloc[0]),
-            right=float(traj["z_position_m"].iloc[-1]),
+            traj["position_m"].values,
+            left=float(traj["position_m"].iloc[0]),
+            right=float(traj["position_m"].iloc[-1]),
         ))
 
-        dq = target_q - self.current_q
+        controller_dt = self.sim_params.frame_dt / self.sim_params.sim_substeps
+        delta_q = target_q - self.current_q
+        dq = delta_q / self.sim_params.frame_dt
         self.current_q = target_q
 
         # Active joint follows trajectory; all others stay at rest position
-        target_qs  = np.full(9, self.init_q, dtype=np.float32)
-        target_qds = np.zeros(9, dtype=np.float32)
-        target_qs[self.i_current_poke]  = target_q
-        target_qds[self.i_current_poke] = dq / self.sim_params.frame_dt
+        # target_qs  = np.full(9, self.init_q, dtype=np.float32)
+        # target_qds = np.zeros(9, dtype=np.float32)
+
+        i_joint = dict_poke_idx_real2sim[self.i_current_poke + 1] - 1
+        control_mask = np.zeros(9, dtype=np.float32)
+        control_mask[i_joint] = 1
+        control_mask = wp.array(control_mask)
+
+
+        # target_qs[i_joint]  = target_q
+        # target_qds[i_joint] = dq / self.sim_params.frame_dt
+
+        target_qs = target_q * control_mask.view(wp.float32)
+        target_qds = dq * control_mask.view(wp.float32)
 
         wp.copy(self.state_now.joint_q,  wp.array(target_qs,  dtype=wp.float32))
         wp.copy(self.state_now.joint_qd, wp.array(target_qds, dtype=wp.float32))
+
+        print(f"Target q: {target_q}")
 
     # ── main loop ─────────────────────────────────────────────────────────────
 
@@ -282,7 +315,7 @@ class ThighpadPokeTestRealistic:
         tube_length   = 576.22 / 1e3
         tube_vol      = (wp.PI * (tube_diameter / 2) ** 2) * tube_length
 
-        t_first_poke_start = float(self.poke_windows.loc[0, "t_start"])
+        t_first_poke_start = self.poke_trajs[0].loc[0, "time_s"]
         if self.sim_time >= t_first_poke_start:
             idxs           = self.pad_start_particle_idx + self.ids_channel
             verts          = self.state_now.particle_q[self.pad_start_particle_idx:]
