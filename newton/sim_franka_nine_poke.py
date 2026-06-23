@@ -43,7 +43,7 @@ class PokeParams:
     z_poke        = 0.010        # z_pad_surface - 0.004 [m]
 
     ### Real-robot Z-trajectory data (one CSV per poke; position_m is already in world-Z frame)
-    traj_dir     = "../Data/Gilbert/Thigh_pad/pokes/adjusted"
+    traj_dir     = "../Data/Gilbert/Thigh_pad/pokes/adjusted_0.0133"
     traj_pattern = "adjusted_newton_poke_{i}_1.csv"
 
     ### Timing per poke phase [s]
@@ -306,6 +306,7 @@ class ThighpadPokeTest:
         
         # Initialize logging
         self.vol_initial = -1
+        self.poke_target_posn: np.array = np.array([0, 0, 0], dtype=np.float32)
         self.log_sim_times: list[float] = []
         self.log_volumes: list[float] = []
         self.log_pressures: list[float] = []
@@ -313,6 +314,7 @@ class ThighpadPokeTest:
         self.log_forces:    list[float] = []
         self.log_forces_penalty: list[float] = []
         self.log_forces_elastic: list[float] = []
+        self.log_probe_pos:         list[float] = []
 
         self.terminated = False
 
@@ -585,36 +587,16 @@ class ThighpadPokeTest:
 
     def _generate_poke_points(self):
         pp = self.poke_params
-        rng = np.random.default_rng(seed=42)
         pokesite_spacing_x = pp.pad_half_x * 2 / 3
         pokesite_spacing_y = pp.pad_half_y * 2 / 3
         
         # TODO - rewrite this to use meshgrid?
-        poke_xs = [
-            pp.pad_center_x - pokesite_spacing_x,
-            pp.pad_center_x,
-            pp.pad_center_x + pokesite_spacing_x,
-            pp.pad_center_x - pokesite_spacing_x,
-            pp.pad_center_x,
-            pp.pad_center_x + pokesite_spacing_x,
-            pp.pad_center_x - pokesite_spacing_x,
-            pp.pad_center_x,
-            pp.pad_center_x + pokesite_spacing_x,
-        ]
-
-        poke_ys = [
-            pp.pad_center_y + pokesite_spacing_y,
-            pp.pad_center_y + pokesite_spacing_y,
-            pp.pad_center_y + pokesite_spacing_y,
-            pp.pad_center_y,
-            pp.pad_center_y,
-            pp.pad_center_y,
-            pp.pad_center_y - pokesite_spacing_y,
-            pp.pad_center_y - pokesite_spacing_y,
-            pp.pad_center_y - pokesite_spacing_y,
-        ]
-        # poke_xs = rng.uniform(pp.pad_center_x - pp.pad_half_x, pp.pad_center_x + pp.pad_half_x, pp.n_pokes)
-        # poke_ys = rng.uniform(pp.pad_center_y - pp.pad_half_y, pp.pad_center_y + pp.pad_half_y, pp.n_pokes)
+        poke_xs_grid = pp.pad_center_x + np.array([-pokesite_spacing_x, 0, pokesite_spacing_x])
+        poke_ys_grid = pp.pad_center_y + np.array([pokesite_spacing_y, 0, -pokesite_spacing_y])
+        
+        X, Y = np.meshgrid(poke_xs_grid, poke_ys_grid)
+        poke_xs = X.flatten()
+        poke_ys = Y.flatten()
 
         z_poke_surface_top = 0.014
         self.poke_points = np.column_stack(
@@ -632,83 +614,40 @@ class ThighpadPokeTest:
         """
         pp = self.poke_params
         data_dir = Path(pp.traj_dir)
-        self.poke_traj_t:   list[np.ndarray] = []
-        self.poke_traj_z:   list[np.ndarray] = []
-        self.poke_traj_dur: list[float]      = []
+        self.poke_traj_dfs:    list[pd.DataFrame] = []
         for i in range(1, pp.n_pokes + 1):
             df = pd.read_csv(data_dir / pp.traj_pattern.format(i=i))
-            t_rel = df["time_s"].values - df["time_s"].values[0]
-            self.poke_traj_t.append(t_rel)
-            self.poke_traj_z.append(df["position_m"].values)
-            self.poke_traj_dur.append(float(t_rel[-1]))
+            self.poke_traj_dfs.append(df)
 
     def _control_poke(self):
-        if self.poke_state == PokeState.DONE:
-            return
 
-        t_elapsed = self.sim_time - self.t_state_start
+        poke_traj_i = self.poke_traj_dfs[self.i_current_poke]
 
-        if self.poke_state == PokeState.INIT:
-            if t_elapsed >= 1.0:
-                self._transition_poke_state(PokeState.APPROACH)
-            return
+        # Get target z from recording
+        target_z = float(np.interp(
+            self.sim_time,
+            poke_traj_i["time_s"].values,
+            poke_traj_i["position_m"].values,
+            left=float(poke_traj_i["position_m"].values[0]),
+            right=float(poke_traj_i["position_m"].values[-1]),
+        ))
 
-        pp = self.poke_params
+        # Get target x/y based on the current poke site
+        target_x, target_y = self.poke_points[self.i_current_poke, 0:2]
 
-        if self.poke_state == PokeState.POKE:
-            # Play back the real-robot Z trajectory; XY stays fixed at the poke site.
-            i  = self.i_current_poke
-            px = self.poke_points[i]
-            dur = self.poke_traj_dur[i]
-            z = float(np.interp(
-                t_elapsed,
-                self.poke_traj_t[i],
-                self.poke_traj_z[i],
-                left=float(self.poke_traj_z[i][0]),
-                right=float(self.poke_traj_z[i][-1]),
-            ))
-            target_pos = np.array([px[0], px[1], z], dtype=np.float32)
-            self.pos_obj.set_target_position(0, wp.vec3(*target_pos.tolist()))
-            # Track current target so the next APPROACH chains from the trajectory's last sample.
-            self.pos_state_end = target_pos
+        # Apply the target x/y and z to the IK objective
+        target_posn = wp.vec3(target_x, target_y, target_z)
+        self.pos_obj.set_target_position(0, target_posn)
 
-            if t_elapsed >= dur:
-                self.poke_done[i] = True
-                print(f"Poke {i} finished at sim time {self.sim_time:.3f}, elapsed wall time {time.time() - self.sim_start_time:.3f}")
-                self.i_current_poke += 1
-                if self.i_current_poke >= pp.n_pokes:
-                    self.poke_state = PokeState.DONE
-                    self.terminate()
-                else:
-                    self._transition_poke_state(PokeState.APPROACH)
-            return
-
-        # APPROACH: linear XY+Z move to the poke site at the trajectory rest height.
-        dur   = pp.t_approach
-        alpha = float(np.clip(t_elapsed / dur, 0.0, 1.0))
-        target_pos = (1.0 - alpha) * self.pos_state_start + alpha * self.pos_state_end
-
-        self.pos_obj.set_target_position(0, wp.vec3(*target_pos.tolist()))
-
-        if alpha >= 1.0:
-            self._transition_poke_state(PokeState.POKE)
-
-    def _transition_poke_state(self, new_state: PokeState):
-        start = self.pos_state_end.copy()   # current position = end of previous segment
-        px    = self.poke_points[self.i_current_poke]
-
-        if new_state == PokeState.APPROACH:
-            # Move XY to the poke site at the trajectory's rest/start height.
-            z_rest = float(self.poke_traj_z[self.i_current_poke][0])
-            end = np.array([px[0], px[1], z_rest], dtype=np.float32)
-        else:
-            # POKE: Z is driven frame-by-frame from the trajectory, so no fixed end target.
-            end = start.copy()
-
-        self.pos_state_start = start
-        self.pos_state_end   = end
-        self.t_state_start   = self.sim_time
-        self.poke_state      = new_state
+        # If we have finished the current poke trajectory, then advance to the next poke site
+        poke_i_t_end = poke_traj_i["time_s"].values[-1]
+        if self.sim_time > poke_i_t_end:
+            self.poke_done[self.i_current_poke] = True
+            print(f"Poke {self.i_current_poke} finished at sim time {self.sim_time:.3f}, \
+                  elapsed wall time {time.time() - self.sim_start_time:.3f}")
+            self.i_current_poke += 1
+            if self.i_current_poke >= self.poke_params.n_pokes:
+                self.terminate()
 
     def _log_states(self):
         tube_diameter = 0.0254/16       # 1/16" in meters
@@ -751,6 +690,9 @@ class ThighpadPokeTest:
         self.log_forces.append(force_total)
         self.log_forces_penalty.append(force_penalty)
         self.log_forces_elastic.append(force_elastic)
+        
+        current_target_posn = self.pos_obj.target_positions.numpy()
+        self.log_probe_pos.append(current_target_posn[0, 2]) # Should ideally move this to the logging func so all logs are synced
         
     
     def _push_targets_from_gizmos(self):
@@ -919,7 +861,8 @@ class ThighpadPokeTest:
             "i_poke": self.log_pokes,
             "force_total_N": self.log_forces,
             "force_penalty_N": self.log_forces_penalty,
-            "force_elastic_N": self.log_forces_elastic
+            "force_elastic_N": self.log_forces_elastic,
+            "probe_z_m":        self.log_probe_pos,
         })
         df_out.to_csv(f"./logs/{self.args['name']}sim-outputs_{now_str}.csv")
 
