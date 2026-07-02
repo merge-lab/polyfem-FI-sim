@@ -16,6 +16,8 @@ from newton._src.solvers.vbd.rigid_vbd_kernels import _eval_body_particle_contac
 from newton._src.utils.selection import match_labels
 from pxr import Usd
 
+from imgui_bundle import imgui, implot
+
 import newton_builders
 import utils_FI
 
@@ -36,10 +38,10 @@ class PokeParams:
     pad_center_y  = -0.5
     pad_half_x    = 0.075 / 2    # ±0.0375 m
     pad_half_y    = 0.065 / 2    # ±0.0325 m
-    z_pad_surface = 0.014        # top surface height [m]
+    z_pad_surface = 0.010        # top surface height [m]
     z_home        = 0.10         # robot home height [m]
-    z_approach    = 0.024        # z_pad_surface + 0.010 [m]
-    z_poke        = 0.010        # z_pad_surface - 0.004 [m]
+    z_approach    = 0.014        # z_pad_surface + 0.010 [m]
+    z_poke        = 0.008        # z_pad_surface - 0.004 [m]
 
     ### Timing per poke phase [s]
     t_approach = 1.0
@@ -218,6 +220,8 @@ class ThighpadPokeTest:
         self.sim_params.sim_substeps = 5
         self.sim_params.iterations = 10
         self.sim_params.fps = 15
+        self.terminated = False
+
         self.poke_params = PokeParams()
         self._generate_poke_points()
 
@@ -234,12 +238,13 @@ class ThighpadPokeTest:
         self.verbose = verbose
 
         # Create scene
-        self.init_q = -0.0855 + 0.0005
-        self.current_q = self.init_q
-        init_qs = self.init_q * wp.ones(9, dtype=wp.float32)
+        init_q = -0.0855 + 0.0005
+        init_qs = init_q * wp.ones(9, dtype=wp.float32)
+        self.current_q = init_q
         self.model = self.init_models()
+        self.init_sensors(self.model) # Add sensors now that the model has been finalized
 
-        self.add_sensors(self.model) # Add sensors now that the model has been finalized
+        self.init_states()
 
         # Initialize camera
         self.viewer = viewer
@@ -247,6 +252,8 @@ class ThighpadPokeTest:
         if not self.args["headless"]:
             self.viewer.set_camera(wp.vec3([0.15, -0.15, 0.1]), -3.7, -118.0)
             self.viewer._cam_speed = 0.15
+            self.init_implot()
+            self.viewer.register_ui_callback(lambda ui: self.gui(ui), position="free")
 
         ### Initialize both solvers
         self.solver_vbd = newton.solvers.SolverVBD(
@@ -263,14 +270,6 @@ class ThighpadPokeTest:
             rigid_avbd_beta=self.sim_params.rigid_avbd_beta,
         )
 
-
-        # Preallocate variables for trajectory, control, and contacts
-        self.state_now = self.model.state()
-        self.state_next = self.model.state()
-        self.control = self.model.control()
-        self.control.joint_target_pos = init_qs     # Initialize configuration of poke fixture
-        self.contacts = self.model.contacts()
-
         # Initialize rigid body solver
         # self.solver_rigid = newton.solvers.SolverMuJoCo(self.model)
         self.solver_rigid = newton.solvers.SolverFeatherstone(
@@ -286,30 +285,11 @@ class ThighpadPokeTest:
 
         # Initialize IK
         self.init_ik()
-        self.solver_ik = ik.IKSolver(
-            model=self.model,
-            n_problems=1,
-            objectives = [self.pos_obj, self.rot_obj, self.obj_joint_limits]
-        )
 
         self.graph = None
         self.capture()
 
-        ### Initialize gui and logging
-        if not self.args["headless"]:
-            self.viewer.register_ui_callback(lambda ui: self.gui(ui), position="side")
-        
-        # Initialize logging
-        self.vol_initial = -1
-        self.log_sim_times: list[float] = []
-        self.log_volumes: list[float] = []
-        self.log_pressures: list[float] = []
-        self.log_pokes:     list[int] = []
-        self.log_forces:    list[float] = []
-        self.log_forces_penalty: list[float] = []
-        self.log_forces_elastic: list[float] = []
-
-        self.terminated = False
+        implot.create_context()
 
 
     def init_models(self):
@@ -323,7 +303,8 @@ class ThighpadPokeTest:
         ## ======= Add thigh pad =============
         # self.create_thighpad(self.scene)
         self.pad_start_particle_idx = len(self.scene.particle_q)
-        self._fixed_particle_ids, dict_surf_select = newton_builders.create_thighpad(
+        self._fixed_particle_ids, self._dict_surf_select = newton_builders.create_pad(
+            "../Assets/Pads/3x3/mesh_l=0.02_e=2e-3/",
             self.scene,
             pos         = wp.vec3(0.0, -0.5, 0.0),
             rot         = wp.quat_identity(),
@@ -332,8 +313,8 @@ class ThighpadPokeTest:
             k_lambda    = self.sim_params.material_k_lambda,
             k_damp      = self.sim_params.material_k_damp,
         )
-        id_channel = 2
-        self.ids_channel = dict_surf_select[id_channel]
+        self.id_channels = [1, 2, 3, 4, 5, 6] # Channel indices for the 3x3 pad
+        # self.ids_channel = self._dict_surf_select[id_channel]
 
         ## ======= Add Franka arm =============
         self.add_articulated_franka(self.scene)
@@ -392,7 +373,7 @@ class ThighpadPokeTest:
         )
         scene.joint_q[:6] = [0.0, 0.0, 0.0, -1.59695, 0.0, 2.5307]
     
-    def add_sensors(self, model):
+    def init_sensors(self, model):
         # newton.sensors.SensorContact only reads rigid-rigid contacts, and SolverVBD never
         # populates contacts.force, so the indentor <-> pad contact force is computed manually
         # from the soft (particle-body) contact data in _update_indentor_force().
@@ -410,6 +391,23 @@ class ThighpadPokeTest:
         # Elastic (nodal internal force) sensor buffers
         self.particle_contact_flag = wp.zeros(model.particle_count, dtype=int)
         self.indentor_elastic_force = wp.zeros(1, dtype=wp.vec3)
+
+    def init_states(self):
+        # Preallocate variables for trajectory, control, and contacts
+        self.state_now = self.model.state()
+        self.state_next = self.model.state()
+        self.control = self.model.control()
+        self.contacts = self.model.contacts()
+        
+        # Initialize logging
+        self.log_sim_times: list[float] = []
+        self.log_pressures: list[float] = []
+        self.log_pokes:     list[int] = []
+        self.log_forces_elastic: list[float] = []
+
+        n_channels = len(self.id_channels)
+        self.vols_initial = -1 * np.ones(n_channels)
+        self.log_volumes: list[np.array] = []
 
     def _update_indentor_force(self):
         """Recompute the contact force on the indentor from the last substep.
@@ -653,46 +651,56 @@ class ThighpadPokeTest:
         self.t_state_start   = self.sim_time
         self.poke_state      = new_state
 
-    def _log_states(self):
+    def _log_pressure(self):
         tube_diameter = 0.0254/16       # 1/16" in meters
         tube_length = 576.22 / 1e3      # 576.22mm in meters
         tube_vol = (wp.PI * (tube_diameter/2)**2) * tube_length
+        tube_vols = tube_vol * np.ones(len(self.id_channels))
 
         # Log the channel volume
-        if self.sim_time >= self.poke_params.t_start_wait:
-            # Get channel volume
-            idxs = self.pad_start_particle_idx + self.ids_channel
-            verts = self.state_now.particle_q[self.pad_start_particle_idx:]
-            channel_volume = utils_FI.compute_volume_mesh(verts, idxs)
-            self.log_volumes.append(channel_volume)
+        volumes = np.zeros(len(self.id_channels))
+        if self.sim_time < self.poke_params.t_start_wait:
+            # Don't log the first few datapoints due to sagging
+            self.log_volumes.append(volumes)
+            self.log_pressures.append(volumes)
+            return
+        else:
+            # Get the volume of each channel for ids in self.channel_id
+            volumes = np.zeros(len(self.id_channels))
+            for i, id_channel in enumerate(self.id_channels):
+                # Get channel volume
+                idxs = self.pad_start_particle_idx + self._dict_surf_select[id_channel]
+                verts = self.state_now.particle_q[self.pad_start_particle_idx:]
+                channel_volume = utils_FI.compute_volume_mesh(verts, idxs)
+                volumes[i] = utils_FI.compute_volume_mesh(verts, idxs)
 
-            if self.vol_initial == -1:
-                self.vol_initial = channel_volume
+            # Store the volumes
+            self.log_volumes.append(volumes)
+            if np.mean(self.vols_initial) < 0:
+                # If vols_initial has not yet been initialized, then store it.
+                self.vols_initial = volumes
 
             # Compute channel pressure using ideal gas laws
             # p1 * v1 = p2 * v2
             # So p2 = p1 * v1/v2
-            p_now = 1 * (self.vol_initial + tube_vol) / (channel_volume + tube_vol)
-            self.log_pressures.append(p_now)
+            # Use p1 = 1atm (Assuming the pressure equilibriated with the outside environment)
+            pressures_now = 1 * (self.vols_initial + tube_vols) / (volumes + tube_vols)
+            self.log_pressures.append(pressures_now)
 
-        else:
-            self.log_volumes.append(0.0)
-            self.log_pressures.append(0.0)
+
+    def _log_states(self):
         self.log_pokes.append(self.i_current_poke)
         self.log_sim_times.append(self.sim_time)
 
+        self._log_pressure()
         # Log the force sensor reading: contact penalty reaction + elastic (material) reaction
         self._update_indentor_force()
-        f_penalty = self.indentor_contact_force.numpy()[0]
+
         f_elastic = self.indentor_elastic_force.numpy()[0]
-        force_penalty = float(np.linalg.norm(f_penalty))
         force_elastic = float(np.linalg.norm(f_elastic))
-        force_total = float(np.linalg.norm(f_penalty + f_elastic))
-        self.viewer.log_scalar("Indentor Contact Force", force_total)
-        self.viewer.log_scalar("Indentor Force (penalty)", force_penalty)
+
         self.viewer.log_scalar("Indentor Force (elastic)", force_elastic)
-        self.log_forces.append(force_total)
-        self.log_forces_penalty.append(force_penalty)
+
         self.log_forces_elastic.append(force_elastic)
         
     
@@ -827,26 +835,45 @@ class ThighpadPokeTest:
 
         self.viewer.end_frame()
 
+    def init_implot(self):
+        """Create an ImPlot context and bind it to Newton's existing ImGui context.
+
+        Replicates what immapp.run(..., with_implot=True) does internally; required
+        because Newton creates the ImGui context but never an ImPlot one.
+        """
+        implot.create_context()
+        implot.set_imgui_context(imgui.get_current_context())
+
     def gui(self, ui):
         ui.text(f"Wall time: {time.time() - self.sim_start_time}")
         ui.text(f"Sim time: {self.sim_time}")
         ui.text(f"Poke state: {self.poke_state.name}")
         ui.text(f"Poke {self.i_current_poke + 1} / {self.poke_params.n_pokes}")
-        ui.text(f"Latest volume [cm^3]: {self.log_volumes[-1] * 100**3}")
+        latest_volume = self.log_volumes[-1] if self.log_volumes else 0.0
+        ui.text(f"Latest volume [cm^3]: {latest_volume * 100**3}")
         ui.separator()
 
         w = 250 # Number of past datapoints to plot
         graph_size = ui.ImVec2(-1, 80)
 
-        def padded(data):
-            """Return a fixed-width array, padded with first non-zero value if shorter than the window."""
-            arr = np.array(data[-w:], dtype=np.float32)
-            if len(arr) < w:
-                arr = np.pad(arr, (w - len(arr), 0), mode="edge")
-            return arr
+        # def padded(data):
+        #     """Return a fixed-width array, padded with first non-zero value if shorter than the window."""
+        #     arr = np.array(data[-w:], dtype=np.float32)
+        #     if len(arr) < w:
+        #         arr = np.pad(arr, (w - len(arr), 0), mode="edge")
+        #     return arr
 
-        ui.text("Channel volume")
-        ui.plot_lines("##iters", padded(self.log_volumes), graph_size=graph_size)
+        # ui.text("Channel volume")
+        # ui.plot_lines("##iters", padded(self.log_volumes), graph_size=graph_size)
+        if self.log_sim_times and implot.begin_plot("Pressures"):
+            implot.setup_axes("t", "pressure [atm]")
+
+            f_contig = lambda arr: np.ascontiguousarray(np.ravel(arr))
+            xs = f_contig(np.asarray(self.log_sim_times, dtype=np.float32))
+            mat_pressures = np.asarray(self.log_pressures, dtype=np.float32)
+            for i, id_channel in enumerate(self.id_channels):
+                implot.plot_line(f"Channel {id_channel}", xs, f_contig(mat_pressures[:, i]))
+            implot.end_plot()
 
     def terminate(self):
         # End the simulation because we've done all 9 pokes
@@ -859,8 +886,6 @@ class ThighpadPokeTest:
             "volumes_m3": self.log_volumes,
             "pressures_atm": self.log_pressures,
             "i_poke": self.log_pokes,
-            "force_total_N": self.log_forces,
-            "force_penalty_N": self.log_forces_penalty,
             "force_elastic_N": self.log_forces_elastic
         })
         df_out.to_csv(f"./logs/{self.args['name']}sim-outputs_{now_str}.csv")

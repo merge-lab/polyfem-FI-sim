@@ -1,0 +1,22 @@
+tetMesh: pad.msh
+selections:
+  - mesh: "../selectors/SelectorDirichlet.obj"
+    surface_id: 0
+    
+  - mesh: "../selectors/SelectorX1.obj"
+    surface_id: 1
+    
+  - mesh: "../selectors/SelectorX2.obj"
+    surface_id: 2
+
+  - mesh: "../selectors/SelectorX3.obj"
+    surface_id: 3
+
+  - mesh: "../selectors/SelectorY1.obj"
+    surface_id: 4
+    
+  - mesh: "../selectors/SelectorY2.obj"
+    surface_id: 5
+
+  - mesh: "../selectors/SelectorY3.obj"
+    surface_id: 6

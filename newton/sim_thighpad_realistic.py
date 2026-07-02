@@ -127,7 +127,8 @@ class ThighpadPokeTestRealistic:
         self.scene.default_particle_radius = self.sim_params.particle_radius
 
         self.pad_start_particle_idx = len(self.scene.particle_q)
-        self._fixed_particle_ids, dict_surf_select = newton_builders.create_thighpad(
+        self._fixed_particle_ids, dict_surf_select = newton_builders.create_pad(
+            "../Assets/Thigh-pad/tets_fine/",
             self.scene,
             pos      = wp.vec3(0.0, 0.0, 0.0),
             rot      = wp.quat_identity(),

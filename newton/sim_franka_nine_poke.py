@@ -330,7 +330,8 @@ class ThighpadPokeTest:
         ## ======= Add thigh pad =============
         # self.create_thighpad(self.scene)
         self.pad_start_particle_idx = len(self.scene.particle_q)
-        self._fixed_particle_ids, dict_surf_select = newton_builders.create_thighpad(
+        self._fixed_particle_ids, dict_surf_select = newton_builders.create_pad(
+            "../Assets/Thigh-pad/mesh_l=0.02_e=2e-3",
             self.scene,
             pos         = wp.vec3(0.0, -0.5, 0.0),
             rot         = wp.quat_identity(),
@@ -338,7 +339,6 @@ class ThighpadPokeTest:
             k_mu        = self.sim_params.material_k_mu,
             k_lambda    = self.sim_params.material_k_lambda,
             k_damp      = self.sim_params.material_k_damp,
-            filepath    = "../Assets/Thigh-pad/mesh_l=0.02_e=2e-3/"
         )
         id_channel = 2
         self.ids_channel = dict_surf_select[id_channel]

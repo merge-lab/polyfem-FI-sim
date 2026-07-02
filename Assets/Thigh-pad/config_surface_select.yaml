@@ -1,10 +1,10 @@
-tetMesh: Thighpad.msh
+tetMesh: ThighpadRemake - Part.msh
 selections:
   - mesh: "../selectors/ThighpadRemake - selectorBase.obj"
-    surface_id: 1
+    surface_id: 0
     
   - mesh: "../selectors/ThighpadRemake - selectorInterior.obj"
-    surface_id: 2
+    surface_id: 1
 
   - mesh: "../selectors/ThighpadRemake - selectorTop.obj"
-    surface_id: 3
+    surface_id: 2

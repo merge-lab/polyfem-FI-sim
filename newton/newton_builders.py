@@ -70,22 +70,20 @@ def create_yam_arm(scene: newton.ModelBuilder, xform: wp.transform):
     )
 
 
-def create_thighpad(
+def create_pad(
+        filepath: str,
         scene: newton.ModelBuilder, pos: wp.vec3, rot: wp.quat, 
         rho: float, k_mu: float, k_lambda: float, k_damp: float,
-        filepath: str = "../Assets/Thigh-pad/tets_fine/"
 ):
     """
-        Load the thigh pad and place it in the simulation scene
+        Load the soft pad and place it in the simulation scene
     """
     # Fetching thighpad asset using the USD ecosystem
     asset_dir = Path(filepath)
-    # asset_dir = "../Assets/Thigh-pad/mesh_l=0.05_e=2e-3"
-    # asset_dir = "../Assets/Thigh-pad/tets_finer"
-    modelpath_thighpad = asset_dir / "model.usda"
-    stage_thighpad = Usd.Stage.Open(str(modelpath_thighpad))
-    prim_thighpad = stage_thighpad.GetPrimAtPath("/root/Model/TetMesh")
-    tetmesh_thighpad = newton.TetMesh.create_from_usd(prim_thighpad)
+    modelpath = asset_dir / "model.usda"
+    stage = Usd.Stage.Open(str(modelpath))
+    prim = stage.GetPrimAtPath("/root/Model/TetMesh")
+    tetmesh = newton.TetMesh.create_from_usd(prim)
 
     pad_start_particle_idx = len(scene.particle_q)
     quat_initial = wp.quat_from_axis_angle(wp.vec3([1, 0, 0]), np.pi/2) # Changes from y-up to z-up
@@ -94,7 +92,7 @@ def create_thighpad(
         rot         = rot * quat_initial,
         scale       = 1.0,
         vel         = wp.vec3(0.0, 0.0, 0.0),
-        mesh        = tetmesh_thighpad,
+        mesh        = tetmesh,
         density     = rho,
         k_mu        = k_mu,
         k_lambda    = k_lambda,
@@ -110,8 +108,7 @@ def create_thighpad(
     file_surf_select = asset_dir / "surface_selections.txt"
     dict_surf_select = load_surf_selection(str(file_surf_select))
 
-    surf_ids_fix = [1] # channel id for bottom surface of thighpad
-    surf_id_channel = 2
+    surf_ids_fix = [0] # channel id for bottom surface of thighpad
     fixed_particle_ids = fix_surfaces_in_mesh(
         scene, pad_start_particle_idx, dict_surf_select, surf_ids_fix
     )
