@@ -33,7 +33,7 @@ class PokeParams:
     t_stop_wait       = 0.05
 
     ### Multi-poke pad geometry
-    n_pokes       = 5
+    n_pokes       = 2
     pad_center_x  = 0.0
     pad_center_y  = -0.5
     pad_half_x    = 0.075 / 2    # ±0.0375 m
@@ -881,15 +881,21 @@ class ThighpadPokeTest:
         self.viewer.close()
 
         # Save log_sim_times, log_volumes, and i_pokes to a csv
-        df_out = pd.DataFrame({
+        dict_out = {
             "sim_times_s": self.log_sim_times,
-            "volumes_m3": self.log_volumes,
-            "pressures_atm": self.log_pressures,
             "i_poke": self.log_pokes,
             "force_elastic_N": self.log_forces_elastic
-        })
-        with np.printoptions(linewidth=10000):
-            df_out.to_csv(f"./logs/{self.args['name']}sim-outputs_{now_str}.csv")
+        }
+
+        mat_volumes = np.array(self.log_volumes)
+        mat_pressures = np.array(self.log_pressures)
+
+        for i, id_channel in enumerate(self.id_channels):
+            dict_out[f"v_{id_channel}"] = mat_volumes[:, i]
+            dict_out[f"p_{id_channel}"] = mat_pressures[:, i]
+        
+        df_out = pd.DataFrame(dict_out)
+        df_out.to_csv(f"./logs/{self.args['name']}sim-outputs_{now_str}.csv")
 
         self.terminated = True
     
