@@ -33,7 +33,7 @@ class PokeParams:
     t_stop_wait       = 0.05
 
     ### Multi-poke pad geometry
-    n_pokes       = 2
+    n_pokes       = 100
     pad_center_x  = 0.0
     pad_center_y  = -0.5
     pad_half_x    = 0.075 / 2    # ±0.0375 m
@@ -222,6 +222,9 @@ class ThighpadPokeTest:
 
         implot.create_context()
 
+    # ----------------------------------------------------------------------
+    #                       Initialization
+    # ----------------------------------------------------------------------
 
     def init_models(self):
         """
@@ -303,24 +306,6 @@ class ThighpadPokeTest:
             force_show_colliders=False,
         )
         scene.joint_q[:6] = [0.0, 0.0, 0.0, -1.59695, 0.0, 2.5307]
-    
-    def init_sensors(self, model):
-        # newton.sensors.SensorContact only reads rigid-rigid contacts, and SolverVBD never
-        # populates contacts.force, so the indentor <-> pad contact force is computed manually
-        # from the soft (particle-body) contact data in _update_indentor_force().
-        indentor_bodies = match_labels(model.body_label, "*indentor")
-        assert len(indentor_bodies) == 1, f"Expected exactly one indentor body, matched {indentor_bodies}"
-        self.indentor_body_idx = indentor_bodies[0]
-
-        # Create self.sensor_body_to_row, which is a mask vector that is -1 for all body indices, except
-        # 0 for the indentor body index.
-        body_to_row = np.full(model.body_count, -1, dtype=np.int32)
-        body_to_row[self.indentor_body_idx] = 0
-        self.sensor_body_to_row = wp.array(body_to_row, dtype=int)
-
-        # Elastic (nodal internal force) sensor buffers
-        self.particle_contact_flag = wp.zeros(model.particle_count, dtype=int)
-        self.indentor_elastic_force = wp.zeros(1, dtype=wp.vec3)
 
     def init_states(self):
         # Preallocate variables for trajectory, control, and contacts
@@ -339,62 +324,43 @@ class ThighpadPokeTest:
         self.vols_initial = -1 * np.ones(n_channels)
         self.log_volumes: list[np.array] = []
 
-    def _update_indentor_force(self):
-        """Recompute the contact force on the indentor from the last substep.
+        # End-effector world poses, one (7,) array [px, py, pz, qx, qy, qz, qw] per frame
+        self.log_ee_poses: list[np.ndarray] = []
 
-        Computes the following simulated contact force:
-        - indentor_elastic_force: internal FEM (elastic + damping) force summed over the
-          contacted vertices (nodal residual method) — the reaction contributed by the
-          deformed pad material.
+    def setup_debug_viz(self, model):
+        # Build per-particle debug color array: blue for fixed, gray for free
+        debug_radius = self.sim_params.particle_radius
+        particle_color_default = [0.6, 0.6, 0.6] # Gray
+        particle_color_fixed = [0.0, 0.0, 1.0] # Blue
 
-        After the substep state swap, state_now holds post-substep poses and state_next the
-        pre-substep poses, matching the (body_q, body_q_prev) pair the particle solve used.
-        """
+        colors_np = np.tile(particle_color_default, (model.particle_count, 1)).astype(np.float32)
+        for idx in self._fixed_particle_ids:
+            colors_np[idx] = particle_color_fixed
+        self.particle_debug_colors = wp.array(colors_np, dtype=wp.vec3)
+        self.particle_debug_radii = wp.full(model.particle_count, debug_radius, dtype=wp.float32)
 
-        # Elastic reaction: flag the contacted pad vertices, then sum their internal FEM forces
-        self.particle_contact_flag.zero_()
-        self.indentor_elastic_force.zero_()
-        wp.launch(
-            flag_contacted_particles,
-            dim=self.contacts.soft_contact_max,
-            inputs=[
-                self.model.shape_body,
-                self.contacts.soft_contact_count,
-                self.contacts.soft_contact_max,
-                self.contacts.soft_contact_particle,
-                self.contacts.soft_contact_shape,
-                self.sensor_body_to_row,
-            ],
-            outputs=[self.particle_contact_flag],
-        )
-        wp.launch(
-            accumulate_elastic_vertex_forces,
-            dim=self.model.tet_indices.shape[0],
-            inputs=[
-                self.sim_params.sim_dt,
-                self.state_now.particle_q,
-                self.solver_vbd.particle_q_prev,
-                self.model.tet_indices,
-                self.model.tet_poses,
-                self.model.tet_materials,
-                self.particle_contact_flag,
-            ],
-            outputs=[self.indentor_elastic_force],
-        )
+    # ----------------------------------------------------------------------
+    #                       Robot control
+    # ----------------------------------------------------------------------
 
-        print(f"Soft countact count: {self.contacts.soft_contact_count.numpy()[0]}/{self.contacts.soft_contact_max}")
+    def _generate_poke_points(self):
+        pp = self.poke_params
+        rng = np.random.default_rng(seed=42)
+        poke_xs = rng.uniform(pp.pad_center_x - pp.pad_half_x, pp.pad_center_x + pp.pad_half_x, pp.n_pokes)
+        poke_ys = rng.uniform(pp.pad_center_y - pp.pad_half_y, pp.pad_center_y + pp.pad_half_y, pp.n_pokes)
+
+        z_poke_surface_top = 0.014
+        self.poke_points = np.column_stack(
+            [poke_xs, poke_ys, np.full(pp.n_pokes, z_poke_surface_top)]
+        ).astype(np.float32)    # shape (n_pokes, 3)
+        self.poke_done      = np.zeros(pp.n_pokes, dtype=bool)
+        self.i_current_poke = 0
 
     def init_ik(self):
         """
         IK setup (single problem, single EE)
         Taken from newton ik_franka example
         """
-        # TODO - abstract this function and move to utils.
-        # self.ee_index = 10
-        # body_q_np = self.state_now.body_q.numpy()
-        # self.ee_tf = wp.transform(*body_q_np[self.ee_index])
-        def _q2v4(q):
-            return wp.vec4(q[0], q[1], q[2], q[3])
 
         newton.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, self.model.state())
 
@@ -456,35 +422,6 @@ class ThighpadPokeTest:
             dim=self.n_dofs,
             inputs=[self.target_joint_q, self.state_now.joint_q, self.target_joint_qd, 1.0 / self.sim_params.frame_dt],
         )
-
-    # ----------------------------------------------------------------------
-    # Helpers
-    # ----------------------------------------------------------------------
-    def setup_debug_viz(self, model):
-        # Build per-particle debug color array: blue for fixed, gray for free
-        debug_radius = self.sim_params.particle_radius
-        particle_color_default = [0.6, 0.6, 0.6] # Gray
-        particle_color_fixed = [0.0, 0.0, 1.0] # Blue
-
-        colors_np = np.tile(particle_color_default, (model.particle_count, 1)).astype(np.float32)
-        for idx in self._fixed_particle_ids:
-            colors_np[idx] = particle_color_fixed
-        self.particle_debug_colors = wp.array(colors_np, dtype=wp.vec3)
-        self.particle_debug_radii = wp.full(model.particle_count, debug_radius, dtype=wp.float32)
-
-
-    def _generate_poke_points(self):
-        pp = self.poke_params
-        rng = np.random.default_rng(seed=42)
-        poke_xs = rng.uniform(pp.pad_center_x - pp.pad_half_x, pp.pad_center_x + pp.pad_half_x, pp.n_pokes)
-        poke_ys = rng.uniform(pp.pad_center_y - pp.pad_half_y, pp.pad_center_y + pp.pad_half_y, pp.n_pokes)
-
-        z_poke_surface_top = 0.014
-        self.poke_points = np.column_stack(
-            [poke_xs, poke_ys, np.full(pp.n_pokes, z_poke_surface_top)]
-        ).astype(np.float32)    # shape (n_pokes, 3)
-        self.poke_done      = np.zeros(pp.n_pokes, dtype=bool)
-        self.i_current_poke = 0
 
     def _control_poke(self):
         if self.poke_state == PokeState.DONE:
@@ -548,7 +485,78 @@ class ThighpadPokeTest:
         self.t_state_start   = self.sim_time
         self.poke_state      = new_state
 
-    def _log_pressure(self):
+    # ----------------------------------------------------------------------
+    #                       Simulated sensors
+    # ----------------------------------------------------------------------
+
+    def init_sensors(self, model):
+        # newton.sensors.SensorContact only reads rigid-rigid contacts, and SolverVBD never
+        # populates contacts.force, so the indentor <-> pad contact force is computed manually
+        # from the soft (particle-body) contact data in _update_indentor_force().
+        indentor_bodies = match_labels(model.body_label, "*indentor")
+        assert len(indentor_bodies) == 1, f"Expected exactly one indentor body, matched {indentor_bodies}"
+        self.indentor_body_idx = indentor_bodies[0]
+
+        # Create self.sensor_body_to_row, which is a mask vector that is -1 for all body indices, except
+        # 0 for the indentor body index.
+        body_to_row = np.full(model.body_count, -1, dtype=np.int32)
+        body_to_row[self.indentor_body_idx] = 0
+        self.sensor_body_to_row = wp.array(body_to_row, dtype=int)
+
+        # Elastic (nodal internal force) sensor buffers
+        self.particle_contact_flag = wp.zeros(model.particle_count, dtype=int)
+        self.indentor_elastic_force = wp.zeros(1, dtype=wp.vec3)
+
+    def _update_indentor_force(self):
+        """Recompute the contact force on the indentor from the last substep.
+
+        Computes the following simulated contact force:
+        - indentor_elastic_force: internal FEM (elastic + damping) force summed over the
+          contacted vertices (nodal residual method) — the reaction contributed by the
+          deformed pad material.
+
+        After the substep state swap, state_now holds post-substep poses and state_next the
+        pre-substep poses, matching the (body_q, body_q_prev) pair the particle solve used.
+        """
+
+        # Elastic reaction: flag the contacted pad vertices, then sum their internal FEM forces
+        self.particle_contact_flag.zero_()
+        self.indentor_elastic_force.zero_()
+        wp.launch(
+            flag_contacted_particles,
+            dim=self.contacts.soft_contact_max,
+            inputs=[
+                self.model.shape_body,
+                self.contacts.soft_contact_count,
+                self.contacts.soft_contact_max,
+                self.contacts.soft_contact_particle,
+                self.contacts.soft_contact_shape,
+                self.sensor_body_to_row,
+            ],
+            outputs=[self.particle_contact_flag],
+        )
+        wp.launch(
+            accumulate_elastic_vertex_forces,
+            dim=self.model.tet_indices.shape[0],
+            inputs=[
+                self.sim_params.sim_dt,
+                self.state_now.particle_q,
+                self.solver_vbd.particle_q_prev,
+                self.model.tet_indices,
+                self.model.tet_poses,
+                self.model.tet_materials,
+                self.particle_contact_flag,
+            ],
+            outputs=[self.indentor_elastic_force],
+        )
+
+        print(f"Soft countact count: {self.contacts.soft_contact_count.numpy()[0]}/{self.contacts.soft_contact_max}")
+
+    # ----------------------------------------------------------------------
+    #                     Loggers      
+    # ----------------------------------------------------------------------
+
+    def _log_pressure(self, state_now: newton.State):
         tube_diameter = 0.0254/16       # 1/16" in meters
         tube_length = 576.22 / 1e3      # 576.22mm in meters
         tube_vol = (wp.PI * (tube_diameter/2)**2) * tube_length
@@ -567,7 +575,7 @@ class ThighpadPokeTest:
             for i, id_channel in enumerate(self.id_channels):
                 # Get channel volume
                 idxs = self.pad_start_particle_idx + self._dict_surf_select[id_channel]
-                verts = self.state_now.particle_q[self.pad_start_particle_idx:]
+                verts = state_now.particle_q[self.pad_start_particle_idx:]
                 channel_volume = utils_FI.compute_volume_mesh(verts, idxs)
                 volumes[i] = utils_FI.compute_volume_mesh(verts, idxs)
 
@@ -584,21 +592,29 @@ class ThighpadPokeTest:
             pressures_now = 1 * (self.vols_initial + tube_vols) / (volumes + tube_vols)
             self.log_pressures.append(pressures_now)
 
+    def _log_robot_state(self, state_now: newton.State):
+        # state_now.body_q holds world-frame body transforms as (body_count, 7) rows
+        # of [px, py, pz, qx, qy, qz, qw] (XYZW quaternion)
+        ee_pose = state_now.body_q.numpy()[self.ee_idx].copy()
+        self.log_ee_poses.append(ee_pose)
 
-    def _log_states(self):
-        self.log_pokes.append(self.i_current_poke)
-        self.log_sim_times.append(self.sim_time)
-
-        self._log_pressure()
+    def _log_elastic_forces(self, state_now: newton.State):
         # Log the force sensor reading: contact penalty reaction + elastic (material) reaction
         self._update_indentor_force()
 
         f_elastic = self.indentor_elastic_force.numpy()[0]
         force_elastic = float(np.linalg.norm(f_elastic))
 
-        # self.viewer.log_scalar("Indentor Force (elastic)", force_elastic)
-
         self.log_forces_elastic.append(force_elastic)
+
+
+    def _log_states(self):
+        self.log_pokes.append(self.i_current_poke)
+        self.log_sim_times.append(self.sim_time)
+
+        self._log_pressure(self.state_now)
+        self._log_robot_state(self.state_now)
+        self._log_elastic_forces(self.state_now)
         
     
     def _push_targets_from_gizmos(self):
@@ -610,7 +626,7 @@ class ThighpadPokeTest:
         self.rot_obj.set_target_rotation(0, wp.vec4(q[0], q[1], q[2], q[3]))
 
     # ----------------------------------------------------------------------
-    # Template API
+    #                       Sim environment managers
     # ----------------------------------------------------------------------
     def capture(self):
         """
@@ -681,29 +697,48 @@ class ThighpadPokeTest:
 
     def run(self):
         self.sim_start_time = time.time()
-        while self.viewer.is_running() and not self.terminated:
+        while not self.terminated:
             if not self.viewer.is_paused():
                 self.step()
             with wp.ScopedTimer("render", active=False):
                 self.render()
 
-    def render(self):
-        self.viewer.begin_frame(self.sim_time)
-        self.viewer.log_state(self.state_now)
-        self.viewer.log_contacts(self.contacts, self.state_now)
+    def terminate(self):
+        # End the simulation because we've done all 9 pokes
+        print(f"End of poke test reached at sim time {self.sim_time}, elapsed wall time {time.time() - self.sim_start_time:.2f}. Terminating sim")
+        self.viewer.close()
+        self.save_csv()
+        self.terminated = True
 
-        # Register gizmo (viewer will draw & mutate transform in-place).
-        # body_q_np = self.state_now.body_q.numpy()
-        # self.viewer.log_gizmo("target_tcp", self.ee_tf, snap_to=wp.transform(*body_q_np[self.ee_index]))
+    def save_csv(self):
+        # Save log_sim_times, log_volumes, and i_pokes to a csv
+        dict_out = {
+            "sim_times_s": self.log_sim_times,
+            "i_poke": self.log_pokes,
+            "force_elastic_N": self.log_forces_elastic
+        }
 
-        if self.args["debug_particles"]:
-            self.viewer.log_points(
-                name="/debug/fixed_particles",
-                points=self.state_now.particle_q,
-                radii=self.particle_debug_radii,
-                colors=self.particle_debug_colors,
-            )
+        mat_volumes = np.array(self.log_volumes)
+        mat_pressures = np.array(self.log_pressures)
 
+        for i, id_channel in enumerate(self.id_channels):
+            dict_out[f"v_{id_channel}"] = mat_volumes[:, i]
+            dict_out[f"p_{id_channel}"] = mat_pressures[:, i]
+
+        robot_ee_col_names = ["robot_ee_x_m", "robot_ee_y_m", "robot_ee_z_m"]
+        mat_ee_poses = np.array(self.log_ee_poses)
+        for i, label in enumerate(robot_ee_col_names):
+            dict_out[label] = mat_ee_poses[:, i]
+        
+        df_out = pd.DataFrame(dict_out)
+        df_out.to_csv(f"./logs/{self.args['name']}sim-outputs_{now_str}.csv")
+
+
+    # ----------------------------------------------------------------------
+    #                       GUI
+    # ----------------------------------------------------------------------
+
+    def _render_poke_targets(self, viewer):
         # Poke target visualization: dark-red = unpoked, dark-green = poked
         colors_np = np.where(
             self.poke_done[:, None],
@@ -712,23 +747,32 @@ class ThighpadPokeTest:
         ).astype(np.float32)
 
         r_poke_viz_pts = 0.001
-        self.viewer.log_points(
+        viewer.log_points(
             name="/poke_targets",
             points=wp.array(self.poke_points, dtype=wp.vec3),
             radii=wp.full(self.poke_params.n_pokes, r_poke_viz_pts, dtype=wp.float32),
             colors=wp.array(colors_np, dtype=wp.vec3),
         )
 
-        contacted_particle_idxs = self.contacts.soft_contact_particle.numpy()
+    def _render_contacted_particles(self, viewer, state_now, contacts):
+        contacted_particle_idxs = contacts.soft_contact_particle.numpy()
         contacted_particle_idxs = contacted_particle_idxs[contacted_particle_idxs >= 0]
         contacted_color_np = np.array([0.0, 0.0, 0.5])
         contacted_colors_np = np.tile(contacted_color_np, (len(contacted_particle_idxs), 1)).astype(np.float32)
-        self.viewer.log_points(
+        viewer.log_points(
             name="/soft_contact_particles",
-            points=wp.array(self.state_now.particle_q.numpy()[contacted_particle_idxs, :], dtype=wp.vec3),
+            points=wp.array(state_now.particle_q.numpy()[contacted_particle_idxs, :], dtype=wp.vec3),
             radii = wp.full(len(contacted_particle_idxs), 0.0005, dtype=wp.float32),
             colors = wp.array(contacted_colors_np, dtype=wp.vec3)
         )
+
+    def render(self):
+        self.viewer.begin_frame(self.sim_time)
+        self.viewer.log_state(self.state_now)
+        self.viewer.log_contacts(self.contacts, self.state_now)
+
+        self._render_poke_targets(self.viewer)
+        self._render_contacted_particles(self.viewer, self.state_now, self.contacts)
 
         self.viewer.end_frame()
 
@@ -750,18 +794,6 @@ class ThighpadPokeTest:
         ui.text(f"Latest volume [cm^3]: {latest_volume * 100**3}")
         ui.separator()
 
-        w = 250 # Number of past datapoints to plot
-        graph_size = ui.ImVec2(-1, 80)
-
-        # def padded(data):
-        #     """Return a fixed-width array, padded with first non-zero value if shorter than the window."""
-        #     arr = np.array(data[-w:], dtype=np.float32)
-        #     if len(arr) < w:
-        #         arr = np.pad(arr, (w - len(arr), 0), mode="edge")
-        #     return arr
-
-        # ui.text("Channel volume")
-        # ui.plot_lines("##iters", padded(self.log_volumes), graph_size=graph_size)
         f_contig = lambda arr: np.ascontiguousarray(np.ravel(arr))
         xs = f_contig(np.asarray(self.log_sim_times, dtype=np.float32))
         if self.log_sim_times and implot.begin_subplots("##SimState", 2, 1, (-1, 400), implot.SubplotFlags_.link_cols):
@@ -785,31 +817,6 @@ class ThighpadPokeTest:
 
             implot.end_subplots()
 
-    def terminate(self):
-        # End the simulation because we've done all 9 pokes
-        print(f"End of poke test reached at sim time {self.sim_time}, elapsed wall time {time.time() - self.sim_start_time:.2f}. Terminating sim")
-        self.viewer.close()
-
-        # Save log_sim_times, log_volumes, and i_pokes to a csv
-        dict_out = {
-            "sim_times_s": self.log_sim_times,
-            "i_poke": self.log_pokes,
-            "force_elastic_N": self.log_forces_elastic
-        }
-
-        mat_volumes = np.array(self.log_volumes)
-        mat_pressures = np.array(self.log_pressures)
-
-        for i, id_channel in enumerate(self.id_channels):
-            dict_out[f"v_{id_channel}"] = mat_volumes[:, i]
-            dict_out[f"p_{id_channel}"] = mat_pressures[:, i]
-        
-        df_out = pd.DataFrame(dict_out)
-        df_out.to_csv(f"./logs/{self.args['name']}sim-outputs_{now_str}.csv")
-
-        self.terminated = True
-    
-
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--debug_particles", action="store_true", help="Show debug particles")
@@ -822,7 +829,8 @@ if __name__ == "__main__":
 
     args = parse_args()
     if args["headless"]:
-        viewer = newton.viewer.ViewerFile(f"{now_str}.bin", auto_save=False)
+        # viewer = newton.viewer.ViewerFile(f"{now_str}.bin", auto_save=False)
+        viewer = newton.viewer.ViewerNull(num_frames=1e7)
     else:
         viewer = newton.viewer.ViewerGL(headless=False)
 
