@@ -1,22 +1,10 @@
 tetMesh: tacIL_gripper_v2.msh
-selections:
-  - mesh: "../selectors/selector_A1.obj"
-    surface_id: 0
-    
-  - mesh: "../selectors/selector_A2.obj"
-    surface_id: 1
-
-  - mesh: "../selectors/selector_B1.obj"
-    surface_id: 2
-
-  - mesh: "../selectors/selector_B2.obj"
-    surface_id: 3
-
-  - mesh: "../selectors/selector_C1.obj"
-    surface_id: 4
-
-  - mesh: "../selectors/selector_C2.obj"
-    surface_id: 5
-
-  - mesh: "../selectors/selector_dirichlet.obj"
-    surface_id: 6
+selections: [
+   "../selectors/selector_A1.obj",
+   "../selectors/selector_A2.obj",
+   "../selectors/selector_B1.obj",
+   "../selectors/selector_B2.obj",
+   "../selectors/selector_C1.obj",
+   "../selectors/selector_C2.obj",
+   "../selectors/selector_dirichlet.obj",
+]

@@ -33,10 +33,10 @@ def _parse_args():
 
     return args, config
 
-def _get_faces_in_selector(tetmesh_verts: np.array, boundary_tris: np.array, selection: dict, args):
+def _get_faces_in_selector(tetmesh_verts: np.array, boundary_tris: np.array, selector_path: str, args):
     # Load surface mesh from selector obj file
     # selector_mesh = meshio.read(selection["mesh"])
-    selector_mesh = trimesh.load_mesh(selection["mesh"])
+    selector_mesh = trimesh.load_mesh(selector_path)
     
     # CORE: use the fast winding number for soups algorithm implemented in the igl library
     # See this paper: https://www.dgp.toronto.edu/projects/fast-winding-numbers/fast-winding-numbers-for-soups-and-clouds-siggraph-2018-barill-et-al.pdf
@@ -69,9 +69,8 @@ def main() -> None:
     
     selections: dict[int, list] = {}
     dfs = []
-    for selection in cfg["selections"]:
-        id_selection = selection["surface_id"]
-        selections[id_selection] = _get_faces_in_selector(verts, boundary_tris, selection, args)
+    for id_selection, selector_path in enumerate(cfg["selections"]):
+        selections[id_selection] = _get_faces_in_selector(verts, boundary_tris, selector_path, args)
         
         # Build dataframe for i-th selection
         # Format: <surf_id, id_v0, id_v1, id_v2>

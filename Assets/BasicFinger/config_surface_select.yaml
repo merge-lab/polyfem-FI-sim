@@ -1,4 +1,4 @@
 tetMesh: basic_finger.msh
-selections:
-  - mesh: "../selectors/selector_dirichlet.obj"
-    surface_id: 6
+selections: [
+  "../selectors/selector_dirichlet.obj"
+]

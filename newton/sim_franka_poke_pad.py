@@ -33,7 +33,7 @@ class PokeParams:
     t_stop_wait       = 0.05
 
     ### Multi-poke pad geometry
-    n_pokes       = 20
+    n_pokes       = 5
     pad_center_x  = 0.0
     pad_center_y  = -0.5
     pad_half_x    = 0.075 / 2    # ±0.0375 m
@@ -888,7 +888,8 @@ class ThighpadPokeTest:
             "i_poke": self.log_pokes,
             "force_elastic_N": self.log_forces_elastic
         })
-        df_out.to_csv(f"./logs/{self.args['name']}sim-outputs_{now_str}.csv")
+        with np.printoptions(linewidth=10000):
+            df_out.to_csv(f"./logs/{self.args['name']}sim-outputs_{now_str}.csv")
 
         self.terminated = True
     
