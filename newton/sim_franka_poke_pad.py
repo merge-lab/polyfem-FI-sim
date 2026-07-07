@@ -149,7 +149,7 @@ class ThighpadPokeTest:
         self.sim_params = newton_builders.SimParams()
         self.sim_params.particle_radius = 0.00005
         self.sim_params.sim_substeps = 5
-        self.sim_params.iterations = 10
+        self.sim_params.iterations = 20
         self.sim_params.fps = 15
         self.terminated = False
 
@@ -182,9 +182,18 @@ class ThighpadPokeTest:
         self.viewer.set_model(self.model)
         if not self.args["headless"]:
             self.viewer.set_camera(wp.vec3([0.15, -0.15, 0.1]), -3.7, -118.0)
-            self.viewer._cam_speed = 0.15
+            self.viewer._cam_speed = 0.05
             self.init_implot()
             self.viewer.register_ui_callback(lambda ui: self.gui(ui), position="free")
+
+            self.show_channels = [False for i in range(len(self.id_channels))]
+
+            channel_colors_rgb = []
+            for i_channel in range(len(self.id_channels)):
+                newton_colors = newton.ModelBuilder._SHAPE_COLOR_PALETTE
+                color_i = newton_colors[i_channel % len(newton_colors)]
+                channel_colors_rgb.append(color_i)
+            self.channel_colors_rgb = np.array(channel_colors_rgb) / 255.0
 
         ### Initialize both solvers
         self.solver_vbd = newton.solvers.SolverVBD(
@@ -346,8 +355,11 @@ class ThighpadPokeTest:
     def _generate_poke_points(self):
         pp = self.poke_params
         rng = np.random.default_rng(seed=42)
-        poke_xs = rng.uniform(pp.pad_center_x - pp.pad_half_x, pp.pad_center_x + pp.pad_half_x, pp.n_pokes)
-        poke_ys = rng.uniform(pp.pad_center_y - pp.pad_half_y, pp.pad_center_y + pp.pad_half_y, pp.n_pokes)
+        pad_span = 0.5 # Proportion of the pad to cover. 1 = full pad, 0.5 = half x half square centered at pad center
+        poke_x_range = pp.pad_center_x + pp.pad_half_x * np.array([-pad_span, pad_span])
+        poke_y_range = pp.pad_center_y + pp.pad_half_y * np.array([-pad_span, pad_span])
+        poke_xs = rng.uniform(poke_x_range[0], poke_x_range[1], pp.n_pokes)
+        poke_ys = rng.uniform(poke_y_range[0], poke_y_range[1], pp.n_pokes)
 
         z_poke_surface_top = 0.014
         self.poke_points = np.column_stack(
@@ -556,7 +568,7 @@ class ThighpadPokeTest:
     #                     Loggers      
     # ----------------------------------------------------------------------
 
-    def _log_pressure(self, state_now: newton.State):
+    def _calc_vols_and_pres(self, state_now: newton.State):
         tube_diameter = 0.0254/16       # 1/16" in meters
         tube_length = 576.22 / 1e3      # 576.22mm in meters
         tube_vol = (wp.PI * (tube_diameter/2)**2) * tube_length
@@ -564,33 +576,43 @@ class ThighpadPokeTest:
 
         # Log the channel volume
         volumes = np.zeros(len(self.id_channels))
+        # Get the volume of each channel for ids in self.channel_id
+        for i, id_channel in enumerate(self.id_channels):
+            # Get channel volume
+            idxs = self.pad_start_particle_idx + self._dict_surf_select[id_channel]
+            verts = state_now.particle_q[self.pad_start_particle_idx:]
+            volumes[i] = utils_FI.compute_volume_mesh(verts, idxs)
+
+        # Compute channel pressure using ideal gas laws
+        # p1 * v1 = p2 * v2
+        # So p2 = p1 * v1/v2
+        # Use p1 = 1atm (Assuming the pressure equilibriated with the outside environment)
+        pressures_now = 1 * (self.vols_initial + tube_vols) / (volumes + tube_vols)
+        return volumes, pressures_now
+
+
+    def _log_pressure(self, state_now: newton.State):
+        # Log the channel volume
         if self.sim_time < self.poke_params.t_start_wait:
             # Don't log the first few datapoints due to sagging
+            volumes = np.zeros(len(self.id_channels))
             self.log_volumes.append(volumes)
             self.log_pressures.append(volumes)
             return
         else:
-            # Get the volume of each channel for ids in self.channel_id
-            volumes = np.zeros(len(self.id_channels))
-            for i, id_channel in enumerate(self.id_channels):
-                # Get channel volume
-                idxs = self.pad_start_particle_idx + self._dict_surf_select[id_channel]
-                verts = state_now.particle_q[self.pad_start_particle_idx:]
-                channel_volume = utils_FI.compute_volume_mesh(verts, idxs)
-                volumes[i] = utils_FI.compute_volume_mesh(verts, idxs)
+            volumes, pressures = self._calc_vols_and_pres(state_now)
 
             # Store the volumes
             self.log_volumes.append(volumes)
             if np.mean(self.vols_initial) < 0:
                 # If vols_initial has not yet been initialized, then store it.
+                # and store a blank pressure because the value we calculated would be bad
                 self.vols_initial = volumes
-
-            # Compute channel pressure using ideal gas laws
-            # p1 * v1 = p2 * v2
-            # So p2 = p1 * v1/v2
-            # Use p1 = 1atm (Assuming the pressure equilibriated with the outside environment)
-            pressures_now = 1 * (self.vols_initial + tube_vols) / (volumes + tube_vols)
-            self.log_pressures.append(pressures_now)
+                default_p = np.zeros(len(self.id_channels))
+                self.log_pressures.append(default_p)
+            else:
+                # vols_initial has been initialized, so we can the pressure we computed is valid
+                self.log_pressures.append(pressures)
 
     def _log_robot_state(self, state_now: newton.State):
         # state_now.body_q holds world-frame body transforms as (body_count, 7) rows
@@ -766,6 +788,28 @@ class ThighpadPokeTest:
             colors = wp.array(contacted_colors_np, dtype=wp.vec3)
         )
 
+    def _render_channels(self, viewer, state_now):
+        for i, id_channel in enumerate(self.id_channels):
+            # Find global indices of channel surface verts
+            idxs_i = self.pad_start_particle_idx + self._dict_surf_select[id_channel]
+            vert_idxs = np.unique(idxs_i)
+            verts_i_wp = wp.array(state_now.particle_q.numpy()[vert_idxs, :], dtype=wp.vec3)
+
+            rads_wp = wp.full(len(vert_idxs), 0.0001, dtype=wp.float32)
+
+            channel_color_np = self.channel_colors_rgb[i, :]
+            contacted_colors_np = np.tile(channel_color_np, (len(vert_idxs), 1)).astype(np.float32)
+            colors_wp = wp.array(contacted_colors_np, dtype=wp.vec3)
+            
+            viewer.log_points(
+                name=f"/ch_{id_channel}_particles",
+                points=verts_i_wp,
+                radii= rads_wp,
+                colors= colors_wp,
+                hidden=self.show_channels[i]
+            )
+        
+
     def render(self):
         self.viewer.begin_frame(self.sim_time)
         self.viewer.log_state(self.state_now)
@@ -773,6 +817,7 @@ class ThighpadPokeTest:
 
         self._render_poke_targets(self.viewer)
         self._render_contacted_particles(self.viewer, self.state_now, self.contacts)
+        self._render_channels(self.viewer, self.state_now)
 
         self.viewer.end_frame()
 
@@ -785,7 +830,7 @@ class ThighpadPokeTest:
         implot.create_context()
         implot.set_imgui_context(imgui.get_current_context())
 
-    def gui(self, ui):
+    def gui(self, ui: imgui):
         ui.text(f"Wall time: {time.time() - self.sim_start_time}")
         ui.text(f"Sim time: {self.sim_time}")
         ui.text(f"Poke state: {self.poke_state.name}")
@@ -816,6 +861,37 @@ class ThighpadPokeTest:
                 implot.end_plot()
 
             implot.end_subplots()
+
+        if imgui.collapsing_header("DEBUG", imgui.TreeNodeFlags_.none):
+            table_flags = imgui.TableFlags_.row_bg | imgui.TableFlags_.borders | imgui.TableFlags_.resizable | imgui.TableFlags_.scroll_x | imgui.TableFlags_.scroll_y
+            if imgui.begin_table("channel_debug_viz", 3, table_flags):
+                # Create header row
+                imgui.table_setup_column("Channel #")
+                imgui.table_setup_column("Show")
+                imgui.table_setup_column("Color")
+                imgui.table_headers_row()
+
+                for i, id_channel in enumerate(self.id_channels):
+                    # Add a row for each channel
+                    imgui.table_next_row()
+
+                    # Column 1: Display the channel's name
+                    imgui.table_set_column_index(0)
+                    if i > 0:
+                        imgui.same_line()
+                    imgui.text(f"Channel {id_channel}")
+
+                    # Column 2: Toggle to show the channel or not
+                    imgui.table_set_column_index(1)
+                    changed_i, show_ch_i = ui.checkbox(f"##show_ch{id_channel}", self.show_channels[i])
+                    if changed_i:
+                        self.show_channels[i] = show_ch_i
+
+                    # Column 3: Set channel particle colors
+                    imgui.table_set_column_index(2)
+                    _, self.channel_colors_rgb[i, :] = imgui.color_edit3(f"##color_ch{id_channel}", self.channel_colors_rgb[i, :], imgui.ColorEditFlags_.display_hsv)
+                    
+                imgui.end_table()
 
 def parse_args():
     parser = argparse.ArgumentParser()
