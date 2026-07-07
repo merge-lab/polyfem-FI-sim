@@ -8,6 +8,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd     # Used for mesh pre-processing
 
+from scipy.spatial import ConvexHull
+import trimesh
+
 import newton
 import newton.ik as ik
 import warp as wp
@@ -583,6 +586,17 @@ class ThighpadPokeTest:
             verts = state_now.particle_q[self.pad_start_particle_idx:]
             volumes[i] = utils_FI.compute_volume_mesh(verts, idxs)
 
+        # Compute and print the ch2 convex hull volume for debugging purposes
+        idxs_ch2 = self.pad_start_particle_idx + self._dict_surf_select[1]
+        mesh_ch2 = trimesh.Trimesh(vertices=state_now.particle_q[self.pad_start_particle_idx:].numpy(), faces=idxs_ch2)
+        print(f"Channel 2 volume trimesh: {mesh_ch2.volume}")
+        print(f"Our calculation: {volumes[1]}")
+        # ch2_vert_idxs = np.unique(idxs_ch2)
+        # ch2_verts_np = state_now.particle_q.numpy()[ch2_vert_idxs, :]
+        # ch2_vol_cvx = ConvexHull(ch2_verts_np).volume
+        # print(f"Channel 2 convex hull volume: {ch2_vol_cvx}")
+
+
         # Compute channel pressure using ideal gas laws
         # p1 * v1 = p2 * v2
         # So p2 = p1 * v1/v2
@@ -842,6 +856,15 @@ class ThighpadPokeTest:
         f_contig = lambda arr: np.ascontiguousarray(np.ravel(arr))
         xs = f_contig(np.asarray(self.log_sim_times, dtype=np.float32))
         if self.log_sim_times and implot.begin_subplots("##SimState", 2, 1, (-1, 400), implot.SubplotFlags_.link_cols):
+
+            # Volumes subplot
+            if implot.begin_plot(""):
+                implot.setup_axes_limits(0, 10, 1.0, 1.015)
+                implot.setup_axes("Time [s]", "Pressure [atm]")
+                mat_volumes = np.asarray(self.log_volumes, dtype=np.float32)
+                for i, id_channel in enumerate(self.id_channels):
+                    implot.plot_line(f"Channel {id_channel}", xs, f_contig(mat_volumes[:, i]))
+                implot.end_plot()
 
             # Pressures subplot
             if implot.begin_plot(""):

@@ -34,6 +34,12 @@ name = "mujoco"
 url = "https://py.mujoco.org"
 explicit = true
 
+[dependency-groups]
+dev = [
+    "mapbox-earcut>=2.0.0",
+    "pytest>=9.1.1",
+]
+
 # Override sources from newton's pyproject.toml
 [tool.uv.sources.warp-lang]
 index = "nvidia"

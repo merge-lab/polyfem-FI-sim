@@ -44,22 +44,29 @@ def compute_volume_mesh(
     indices: wp.array,
 ) -> float:
     """
-    Compute the mass, center of mass, inertia, and volume of a triangular mesh.
+    Compute the volume of a closed triangular mesh.
 
     Args:
-        vertices: A wp.array of vertex positions (3D coordinates).
-        indices: A wp.array of triangle indices (each triangle is defined by 3 vertex indices).
+        vertices: Vertex positions (3D coordinates), as a wp.array or numpy-like (N, 3) array.
+        indices: Triangle indices (each triangle is defined by 3 vertex indices).
 
     Returns:
-        A tuple containing:
-            - volume: The signed volume of the mesh.
+        The (unsigned) volume of the mesh.
     """
 
     indices = np.array(indices).flatten()
     num_tris = len(indices) // 3
     vol_warp = wp.zeros(1, dtype=float) # Preallocate output
 
-    wp_vertices = wp.array(vertices, dtype=wp.vec3)
+    verts_np = vertices.numpy() if isinstance(vertices, wp.array) else np.asarray(vertices)
+    verts_np = verts_np.reshape(-1, 3)
+    # Center the mesh on its vertex mean before summing origin-tetrahedra:
+    # their magnitudes grow with the mesh's distance from the origin while the
+    # volume itself doesn't, so a far-from-origin mesh loses most of float32's
+    # precision to cancellation. Volume is translation-invariant.
+    verts_np = verts_np - verts_np.mean(axis=0, dtype=np.float64)
+
+    wp_vertices = wp.array(verts_np, dtype=wp.vec3)
     wp_indices = wp.array(indices, dtype=int)
 
     wp.launch(
